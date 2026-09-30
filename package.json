@@ -1,0 +1,28 @@
+{
+  "name": "meme-autoposter",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --test-scheduled",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run lint && npm run typecheck && npm test",
+    "db:local": "wrangler d1 migrations apply meme-autoposter-jobs --local",
+    "deploy": "node scripts/deploy.mjs",
+    "setup": "node scripts/admin.mjs setup",
+    "status": "node scripts/admin.mjs status",
+    "db:remote": "wrangler d1 migrations apply meme-autoposter-jobs --remote"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "@cloudflare/vitest-plugin": "latest",
+    "@eslint/js": "latest",
+    "eslint": "latest",
+    "typescript": "latest",
+    "typescript-eslint": "latest",
+    "vitest": "^4.1.0",
+    "wrangler": "latest"
+  }
+}
