@@ -73,6 +73,44 @@ export async function ownerSetupStatus(env: Env) {
   return { matched: !!pending.senderId, expired: false, senderId: pending.senderId ?? undefined, matchedAt: pending.matchedAt ?? undefined, expiresAt: pending.expiresAt };
 }
 
+// Read only: establish whether Meta exposes the pending authorization DM without
+// treating an API read as proof of webhook delivery or changing the allowlist.
+export async function diagnoseOwnerSetup(env: Env) {
+  const pending = await settings<OwnerSetup>(env, 'owner_setup');
+  if (!pending || pending.expiresAt <= Date.now()) throw new AppError('owner_setup_expired');
+  const conversations = await metaRequest<ObjectValue>(env, 'me/conversations?platform=instagram&fields=id&limit=10');
+  let inspectedMessages = 0;
+  let inspectedConversations = 0;
+  if (!Array.isArray(conversations.data)) throw new AppError('invalid_conversation_list');
+  for (const raw of conversations.data.slice(0, 10)) {
+    const id = object(raw).id;
+    if (typeof id !== 'string' || !/^[A-Za-z0-9_=-]{1,512}$/.test(id)) continue;
+    const conversation = await metaRequest<ObjectValue>(env, `${encodeURIComponent(id)}?fields=messages.limit(20){id,created_time}`);
+    inspectedConversations++;
+    const messages = object(conversation.messages).data;
+    if (!Array.isArray(messages)) continue;
+    for (const rawMessage of messages.slice(0, 20)) {
+      const entry = object(rawMessage);
+      const created = typeof entry.created_time === 'string' ? Date.parse(entry.created_time) : NaN;
+      const messageId = entry.id;
+      if (!Number.isFinite(created) || created < pending.createdAt - 30_000 || created > Date.now() + 300_000 || typeof messageId !== 'string' || !/^[A-Za-z0-9_=-]{1,512}$/.test(messageId)) continue;
+      if (++inspectedMessages > 20) return { conversationsReadable: true, inspectedConversations, inspectedMessages: 20, challengeFound: false, bounded: true };
+      const details = await metaRequest<ObjectValue>(env, `${encodeURIComponent(messageId)}?fields=created_time,from,to,message`);
+      const text = typeof details.message === 'string' ? details.message.trim() : '';
+      if (!await constantTimeEqual(await sha256(text.replace(/\s/g, '')), pending.hash)) continue;
+      const recipients = object(details.to).data;
+      const recipientMatches = Array.isArray(recipients) && recipients.some(raw => pending.recipients.includes(identifier(object(raw).id) ?? ''));
+      return {
+        conversationsReadable: true, inspectedConversations, inspectedMessages, challengeFound: true,
+        exactText: await constantTimeEqual(await sha256(text), pending.hash), recipientMatches,
+        senderPresent: !!identifier(object(details.from).id), createdAt: created,
+        webhookVerified: !!pending.senderId,
+      };
+    }
+  }
+  return { conversationsReadable: true, inspectedConversations, inspectedMessages, challengeFound: false, webhookVerified: !!pending.senderId };
+}
+
 export async function finishOwnerSetup(env: Env): Promise<void> {
   const pending = await settings<OwnerSetup>(env, 'owner_setup');
   if (!pending?.senderId || !env.OWNER_IG_SENDER_ID || !await constantTimeEqual(pending.senderId, env.OWNER_IG_SENDER_ID)) throw new AppError('owner_installation_not_confirmed');

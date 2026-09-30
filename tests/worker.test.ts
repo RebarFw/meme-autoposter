@@ -4,7 +4,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../src/index';
 import { claimJob, enqueue, maintenance, processJob, saveSetting } from '../src/jobs';
 import { parseMessages } from '../src/meta';
-import { secureUrl } from '../src/security';
+import { normalizeMetaAppSecret, secureUrl, validSignature } from '../src/security';
 import { storeVideo } from '../src/media';
 import { BufferClient } from '../src/buffer';
 import { downloadVideo } from '../src/downloaders';
@@ -43,6 +43,14 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('webhook security', () => {
+  it('verifies the independent RFC 4231 HMAC-SHA256 vector and safely handles clipboard whitespace', async () => {
+    const body = new TextEncoder().encode('what do ya want for nothing?');
+    const signature = 'sha256=5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843';
+    expect(await validSignature(body, signature, 'Jefe')).toBe(true);
+    expect(await validSignature(body, signature, ' Jefe\r\n')).toBe(true);
+    expect(await validSignature(body, signature, 'wrong')).toBe(false);
+    expect(normalizeMetaAppSecret(' "' + 'a'.repeat(32) + '"\r\n')).toBe('a'.repeat(32));
+  });
   it('serves health and verifies only the correct token', async () => {
     expect((await call('/health')).status).toBe(200);
     const valid = await call('/webhooks/instagram?hub.mode=subscribe&hub.verify_token=test-verify&hub.challenge=123');

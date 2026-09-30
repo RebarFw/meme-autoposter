@@ -17,6 +17,7 @@
     "secrets:status": "node scripts/secret-status.mjs",
     "owner:start": "node scripts/owner.mjs start",
     "owner:status": "node scripts/owner.mjs status",
+    "owner:diagnose": "node scripts/owner.mjs diagnose",
     "owner:finish": "node scripts/owner.mjs finish",
     "meta:diagnose": "node scripts/admin.mjs meta:diagnose",
     "meta:subscribe": "node scripts/admin.mjs meta:subscribe",

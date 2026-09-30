@@ -15,6 +15,8 @@ try {
   if (command === 'start') {
     const result = await request('start', 'POST');
     console.log(JSON.stringify({ sendFrom: 'Your approved personal Instagram account', sendTo: '@' + result.username, message: result.message, expiresAt: new Date(result.expiresAt).toISOString() }, null, 2));
+  } else if (command === 'diagnose') {
+    console.log(JSON.stringify(await request('diagnose', 'GET'), null, 2));
   } else if (command === 'status') {
     const result = await request('status', 'GET');
     // The actual sender ID is returned only to the authenticated installer.
@@ -29,5 +31,5 @@ try {
       catch (error) { if (attempt >= 3) throw error; await delay(1500); }
     }
     console.log('Verified personal sender securely installed as OWNER_IG_SENDER_ID; temporary setup proof removed.');
-  } else throw new Error('Use npm run owner:start, owner:status or owner:finish.');
+  } else throw new Error('Use npm run owner:start, owner:status, owner:diagnose or owner:finish.');
 } catch (error) { console.error(error.message); process.exitCode = 1; }

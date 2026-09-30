@@ -8,14 +8,15 @@
 
 ## Real acceptance test after setup
 
-1. Keep Meta in development; authorize owned accounts/testers; configure the deployed callback and `messages` field. Enter Worker secrets securely, then run `npm run setup`. Run `npm run owner:start`, send its one-time message from the approved personal account to the meme page, and run `npm run owner:finish` to install the verified sender securely. This tests real signed webhook delivery without creating posts.
-2. Share one short MP4 Reel that you own or have permission to repost from the approved personal account to the meme page. Record the D1 job hash using `npm run status`.
-3. Confirm exactly one Buffer create per channel, both with immediate mode. Confirm both actual network posts, and final `completed` with both Buffer `sent` statuses.
-4. Verify its R2 object is gone after both publications. Sending/retrying the same signed Meta event must leave the same job/post IDs.
-5. DM another Reel from an unapproved test account. Confirm no new job and no Buffer post.
-6. Test a shared image/story or random text. Confirm no publish. Test an inaccessible Reel; confirm a fixed error state and eventual cleanup.
-7. If `no_downloader_could_resolve_reel` occurs, inspect the provider error codes first. A thumbnail-only native share may need a Reel permalink or a provider that can resolve Meta's supplied data. Never promise the native Share flow works before this real test.
-8. Enable owner confirmation only after send-message permission works. Its success must mean both channels are actually `sent`.
+1. Keep Meta unpublished as requested; authorize owned accounts/testers; configure the callback and `messages` field. Enter Worker secrets securely, then run `npm run setup` and `npm run meta:diagnose`. Test the callback with Meta's dashboard synthetic test. The current Instagram Login dashboard explicitly requires a published app for real webhook notifications; successful API reads and account subscriptions do not bypass that condition. Do not publish the app or start App Review automatically.
+2. After real webhook delivery has been enabled through an explicitly authorized Meta setup change, run `npm run owner:start`, send its one-time message from the approved personal account to the meme page, and run `npm run owner:finish` to install the verified sender securely. This tests real signed webhook delivery without creating posts. A pending DM can be checked separately with `npm run owner:diagnose`, which does not authorize a sender.
+3. Share one short MP4 Reel that you own or have permission to repost from the approved personal account to the meme page. Record the D1 job hash using `npm run status`.
+4. Confirm exactly one Buffer create per channel, both with immediate mode. Confirm both actual network posts, and final `completed` with both Buffer `sent` statuses.
+5. Verify its R2 object is gone after both publications. Sending/retrying the same signed Meta event must leave the same job/post IDs.
+6. DM another Reel from an unapproved test account. Confirm no new job and no Buffer post.
+7. Test a shared image/story or random text. Confirm no publish. Test an inaccessible Reel; confirm a fixed error state and eventual cleanup.
+8. If `no_downloader_could_resolve_reel` occurs, inspect the provider error codes first. A thumbnail-only native share may need a Reel permalink or a provider that can resolve Meta's supplied data. Never promise the native Share flow works before this real test.
+9. Enable owner confirmation only after send-message permission works. Its success must mean both channels are actually `sent`.
 
 ## Scope of confidence
 

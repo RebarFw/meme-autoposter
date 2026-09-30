@@ -1,4 +1,4 @@
-import { limitedBytes } from './security';
+import { limitedBytes, normalizeMetaAppSecret } from './security';
 import { AppError, type Env } from './types';
 import { metaAccessToken } from './meta';
 
@@ -111,6 +111,7 @@ export async function diagnoseMeta(env: Env, subscribe = false) {
   const created = !!creation?.ok && creation.body.success === true;
   return {
     apiHost: 'graph.instagram.com', apiVersion: env.META_API_VERSION,
+    appSecretFormatting: { configured: !!env.META_APP_SECRET, rawLength: env.META_APP_SECRET?.length ?? 0, normalizedLength: normalizeMetaAppSecret(env.META_APP_SECRET ?? '').length, isHex32: /^[a-f0-9]{32}$/i.test(normalizeMetaAppSecret(env.META_APP_SECRET ?? '')) },
     account: { ...evidence(profile), id: accountId, appScopedId: identifier(me.id), username: safeText(env, me.username) },
     permissions: { required, scopesEnumerated: false, basis: 'Authorization of profile and Conversations API reads; scope strings are not enumerated.', messaging: evidence(messaging) },
     subscriptionBefore: before ? { ...evidence(before), apps: applications(env, before) } : undefined,

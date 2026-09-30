@@ -13,9 +13,13 @@ export async function constantTimeEqual(a: string, b: string): Promise<boolean> 
   return difference === 0;
 }
 
+export function normalizeMetaAppSecret(secret: string): string {
+  return secret.trim().replace(/^(["'])([a-f0-9]{32})\1$/i, '$2');
+}
+
 export async function validSignature(body: Uint8Array, header: string | null, secret: string): Promise<boolean> {
   if (!header || !/^sha256=[a-f0-9]{64}$/i.test(header)) return false;
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(normalizeMetaAppSecret(secret)), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
   const signature = Uint8Array.from(header.slice(7).match(/../g)!, part => parseInt(part, 16));
   return crypto.subtle.verify('HMAC', key, signature, body);
 }

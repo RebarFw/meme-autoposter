@@ -57,6 +57,8 @@ Get-Content -Raw .secrets/meta-verify-token | Set-Clipboard
 
 In your Meta app's **Manage messaging & content on Instagram** use case, open the Instagram Webhooks configuration. Set the callback URL, paste that verify token, and verify/save. Select the Instagram `messages` field. Keep the app in **Development**. Add/authorize your owned Instagram accounts as testers where required. Select Instagram API with Instagram Login: this project uses `graph.instagram.com` and an Instagram User access token, not a Facebook Page token.
 
+**Current delivery limitation:** on 2026-09-30 the actual Instagram Login dashboard explicitly displayed “To receive webhooks, your app must be in published state.” Profile reads, Conversations API reads and account subscriptions succeeded while the app was unpublished; a real setup DM was readable through Meta's API but did not arrive at the Worker. Dashboard synthetic webhook tests do reach the Worker. Keep the app unpublished as requested: successful API authorization or tester enrollment does not establish live DM delivery. Publishing the app or replacing webhook ingestion with API polling requires an explicit decision; neither is performed automatically.
+
 Then securely enter the secrets:
 
 ```powershell
@@ -68,6 +70,8 @@ npm run owner:start
 ```
 
 Send the exact one-time message printed by `owner:start` **from your approved personal Instagram account** to the indicated meme page. It expires after 15 minutes. Then run `npm run owner:finish`: the authenticated installer reads the sender ID verified by Meta's signature, uploads it as `OWNER_IG_SENDER_ID` through Wrangler standard input, and removes the temporary setup proof. The setup DM creates no publishing job. `npm run owner:status` checks delivery without printing the sender ID. A new `owner:start` invalidates the previous message; an already configured owner cannot be rebound through this flow.
+
+If no verified setup DM arrives, `npm run owner:diagnose` checks the pending code through Meta's documented Conversations/message reads. It returns only match/recipient/format booleans and counts, discards message contents and sender IDs, and never installs an owner. This distinguishes API-visible messages from actual signed webhook delivery.
 
 `META_ACCESS_TOKEN` should be the meme account's Instagram User access token with `instagram_business_basic` and `instagram_business_manage_messages`. Use the Instagram app secret associated with that token's app. The sender ID is the **Instagram-scoped sender ID in the actual inbound messaging webhook**, not a username, Buffer channel ID, or an arbitrary profile ID. It is checked as an exact match. The setup flow discovers it from your authorization DM; you do not need to find it manually. Do not paste any API credential into chat or commit it.
 
@@ -135,7 +139,7 @@ npm run db:local
 npm run dev
 ```
 
-`GET /health` is public. `GET` and `POST /webhooks/instagram` perform verification and ingest signed DMs. `/media/<job-hash>.mp4` is capability protected. `POST /admin/setup`, `GET /admin/status`, `GET /admin/meta/diagnose`, `POST /admin/meta/subscribe`, and the `/admin/owner/start`, `/admin/owner/status`, `/admin/owner/finish` operations require `ADMIN_TOKEN`. The local admin CLI reads its ignored token automatically. Status returns fixed error codes and post IDs, never source URLs or secrets. The one-time setup stores only a hash of its code, expires after 15 minutes, and records a sender only after signature validation. Structured logs likewise contain hashes, provider names, fixed codes and post IDs only; request invocation logging is disabled to avoid logging temporary URL tokens.
+`GET /health` is public. `GET` and `POST /webhooks/instagram` perform verification and ingest signed DMs. `/media/<job-hash>.mp4` is capability protected. `POST /admin/setup`, `GET /admin/status`, `GET /admin/meta/diagnose`, `POST /admin/meta/subscribe`, and the `/admin/owner/start`, `/admin/owner/status`, `/admin/owner/diagnose`, `/admin/owner/finish` operations require `ADMIN_TOKEN`. The local admin CLI reads its ignored token automatically. Status returns fixed error codes and post IDs, never source URLs or secrets. The one-time setup stores only a hash of its code, expires after 15 minutes, and records a sender only after signature validation. Structured logs likewise contain hashes, provider names, fixed codes and post IDs only; request invocation logging is disabled to avoid logging temporary URL tokens.
 
 `npm run check` runs ESLint, TypeScript and Vitest inside the actual Workers runtime with local D1/R2. Tests mock Meta/Buffer HTTP responses; they never post to your real channels. GitHub Actions repeats checks and the Wrangler bundle dry run. See `docs/testing.md` for live acceptance checks and `docs/api-contracts.md` for official API references.
 

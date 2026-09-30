@@ -2,7 +2,7 @@ import { BufferClient } from './buffer';
 import { enqueue, maintenance, processJob, saveSetting, settings } from './jobs';
 import { metaRequest, parseMessages } from './meta';
 import { diagnoseMeta } from './meta-diagnostics';
-import { acceptOwnerSetup, finishOwnerSetup, ownerSetupStatus, startOwnerSetup } from './owner-setup';
+import { acceptOwnerSetup, diagnoseOwnerSetup, finishOwnerSetup, ownerSetupStatus, startOwnerSetup } from './owner-setup';
 import { serveMedia } from './media';
 import { privacyResponse } from './privacy';
 import { constantTimeEqual, limitedBytes, validSignature } from './security';
@@ -15,6 +15,7 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
   if (!env.ADMIN_TOKEN || !auth.startsWith('Bearer ') || !await constantTimeEqual(auth.slice(7), env.ADMIN_TOKEN)) return json({ error: 'unauthorized' }, 401);
   if (path === '/admin/owner/start' && request.method === 'POST') return json(await startOwnerSetup(env));
   if (path === '/admin/owner/status' && request.method === 'GET') return json(await ownerSetupStatus(env));
+  if (path === '/admin/owner/diagnose' && request.method === 'GET') return json(await diagnoseOwnerSetup(env));
   if (path === '/admin/owner/finish' && request.method === 'POST') { await finishOwnerSetup(env); return json({ installed: true }); }
   if (path === '/admin/meta/diagnose' && request.method === 'GET') return json(await diagnoseMeta(env));
   if (path === '/admin/meta/subscribe' && request.method === 'POST') return json(await diagnoseMeta(env, true));
@@ -67,7 +68,7 @@ export default {
       if (!env.META_APP_SECRET) return json({ error: 'signature_not_configured' },503);
       if (Number(request.headers.get('content-length')) > 256_000) return json({ error: 'body_too_large' },413);
       const body = await limitedBytes(request.body, 256_000);
-      if (!await validSignature(body, request.headers.get('x-hub-signature-256'), env.META_APP_SECRET)) return json({ error: 'invalid_signature' },403);
+      if (!await validSignature(body, request.headers.get('x-hub-signature-256'), env.META_APP_SECRET)) { log('webhook_signature_rejected'); return json({ error: 'invalid_signature' },403); }
       let payload: unknown;
       try { payload = JSON.parse(new TextDecoder().decode(body)); } catch { return json({ error: 'invalid_json' },400); }
       if (await acceptOwnerSetup(env, payload)) return json({ received: true, ownerSetup: true });

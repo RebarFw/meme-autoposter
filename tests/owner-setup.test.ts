@@ -40,7 +40,7 @@ afterEach(() => vi.restoreAllMocks());
 describe('one-time approved sender setup', () => {
   it('protects every administrative setup operation before calling Meta', async () => {
     const fetcher = vi.spyOn(globalThis, 'fetch');
-    for (const [path, method] of [['start', 'POST'], ['status', 'GET'], ['finish', 'POST']]) {
+    for (const [path, method] of [['start', 'POST'], ['status', 'GET'], ['diagnose', 'GET'], ['finish', 'POST']]) {
       expect((await call('/admin/owner/' + path, { method })).status).toBe(401);
     }
     expect(fetcher).not.toHaveBeenCalled();
@@ -123,6 +123,42 @@ describe('one-time approved sender setup', () => {
     const configured = { ...unconfigured(), OWNER_IG_SENDER_ID: '111', BUFFER_API_KEY: 'fake-buffer' };
     expect((await call('/admin/owner/start', { method: 'POST', headers: auth }, configured)).status).toBe(503);
     await send(payload(challenge.message, '333'), true, configured);
+    expect((await status()).matched).toBe(false);
+  });
+  it('diagnoses the pending DM through Meta without storing message content or authorizing its sender', async () => {
+    const challenge = await start();
+    const fetcher = vi.mocked(globalThis.fetch);
+    fetcher.mockImplementation(async input => {
+      const url = String(input);
+      if (url.includes('/me/conversations')) return Response.json({ data: [{ id: 'conversation-1' }] });
+      if (url.includes('/conversation-1?')) return Response.json({ messages: { data: [{ id: 'message-1', created_time: new Date().toISOString() }] } });
+      if (url.includes('/message-1?')) return Response.json({ message: challenge.message, from: { id: '111' }, to: { data: [{ id: '222' }] } });
+      throw new Error('Unexpected Meta request');
+    });
+    const response = await call('/admin/owner/diagnose', { headers: auth });
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    expect(result).toMatchObject({ challengeFound: true, exactText: true, recipientMatches: true, senderPresent: true, webhookVerified: false });
+    expect(JSON.stringify(result)).not.toContain(challenge.message);
+    expect(JSON.stringify(result)).not.toContain('111');
+    expect((await status()).matched).toBe(false);
+    expect(JSON.stringify(await settings(unconfigured(), 'owner_setup'))).not.toContain(challenge.message);
+  });
+  it('ignores old API messages and detects line breaks without accepting a webhook or binding a sender', async () => {
+    const challenge = await start();
+    const fetcher = vi.mocked(globalThis.fetch);
+    fetcher.mockImplementation(async input => {
+      const url = String(input);
+      if (url.includes('/me/conversations')) return Response.json({ data: [{ id: 'conversation-1' }] });
+      if (url.includes('/conversation-1?')) return Response.json({ messages: { data: [
+        { id: 'old', created_time: new Date(Date.now() - 60_000).toISOString() },
+        { id: 'current', created_time: new Date().toISOString() },
+      ] } });
+      expect(url).not.toContain('/old?');
+      return Response.json({ message: challenge.message.replace('meme-setup:', 'meme-\nsetup:'), from: { id: '111' }, to: { data: [{ id: '999' }] } });
+    });
+    const response = await call('/admin/owner/diagnose', { headers: auth });
+    expect(await response.json()).toMatchObject({ challengeFound: true, exactText: false, recipientMatches: false, webhookVerified: false });
     expect((await status()).matched).toBe(false);
   });
 });
