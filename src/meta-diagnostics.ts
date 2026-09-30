@@ -82,20 +82,20 @@ export async function diagnoseMeta(env: Env, subscribe = false) {
       nonTokenCharacterCodes: [...new Set(Array.from(raw).filter(char => !/[A-Za-z0-9_-]/.test(char)).map(char => 'U+' + char.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')))].slice(0, 20),
     } };
   }
-  const [profile, permissions] = await Promise.all([
+  const [profile, messaging] = await Promise.all([
     inspect(env, 'me?fields=id,user_id,username'),
-    // A rejected permission-list query is reported as unknown, never as missing
-    // permissions or proof that App Review is required.
-    inspect(env, 'me/permissions'),
+    // Instagram Login does not implement /me/permissions. This documented
+    // read requires both business_basic and business_manage_messages. Request
+    // IDs only, then discard them; never collect message contents for diagnosis.
+    inspect(env, 'me/conversations?platform=instagram&fields=id&limit=1'),
   ]);
   const me = Array.isArray(profile.body.data) ? object(profile.body.data[0]) : profile.body;
   const accountId = identifier(me.user_id) ?? identifier(me.id);
-  const permissionRows = permissions.ok && Array.isArray(permissions.body.data) ? permissions.body.data.map(object) : [];
-  const granted = permissionRows.filter(row => row.status === 'granted').map(row => permissionName(row.permission)).filter((name): name is string => !!name);
-  const required = Object.fromEntries(['instagram_business_basic', 'instagram_business_manage_messages'].map(name => {
-    const row = permissionRows.find(row => row.permission === name);
-    return [name, row?.status === 'granted' ? 'granted' : row ? 'not_granted' : permissionRows.length ? 'not_granted' : 'unknown'];
-  }));
+  const messagingAuthorized = messaging.ok && Array.isArray(messaging.body.data);
+  const required = {
+    instagram_business_basic: (profile.ok && accountId) || messagingAuthorized ? 'verified_by_api' : 'unknown',
+    instagram_business_manage_messages: messagingAuthorized ? 'verified_by_api' : 'unknown',
+  };
   const before = accountId ? await inspect(env, `${accountId}/subscribed_apps`) : undefined;
   let creation: ApiResult | undefined;
   let after: ApiResult | undefined;
@@ -112,12 +112,12 @@ export async function diagnoseMeta(env: Env, subscribe = false) {
   return {
     apiHost: 'graph.instagram.com', apiVersion: env.META_API_VERSION,
     account: { ...evidence(profile), id: accountId, appScopedId: identifier(me.id), username: safeText(env, me.username) },
-    permissions: { ...evidence(permissions), required, granted },
+    permissions: { required, scopesEnumerated: false, basis: 'Authorization of profile and Conversations API reads; scope strings are not enumerated.', messaging: evidence(messaging) },
     subscriptionBefore: before ? { ...evidence(before), apps: applications(env, before) } : undefined,
     subscriptionCreate: creation ? { ...evidence(creation), success: created } : undefined,
     subscriptionAfter: after ? { ...evidence(after), apps: applications(env, after) } : undefined,
     appMode: 'Not read from this Instagram user token; no app mode was changed.',
-    appReview: created ? 'Not blocking this account subscription request. Webhook delivery still needs a separate test.' : 'No App Review or live-mode conclusion without supporting Meta API evidence.',
+    appReview: profile.ok && messagingAuthorized ? 'Not blocking the tested profile and messaging API reads. Webhook delivery still needs a separate test.' : created ? 'Not blocking this account subscription request. Webhook delivery still needs a separate test.' : 'No App Review or live-mode conclusion without supporting Meta API evidence.',
     webhook: `${env.PUBLIC_BASE_URL}/webhooks/instagram`,
   };
 }
