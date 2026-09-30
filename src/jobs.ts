@@ -155,6 +155,7 @@ export async function processJob(env: Env, id: string): Promise<void> {
 
 export async function maintenance(env: Env): Promise<void> {
   const now = Date.now();
+  await env.DB.prepare("DELETE FROM settings WHERE key='owner_setup' AND json_extract(value, '$.expiresAt')<=?").bind(now).run();
   const expired = (await env.DB.prepare('SELECT * FROM jobs WHERE media_expires_at<=? AND object_key IS NOT NULL LIMIT 20').bind(now).all<Job>()).results;
   for (const job of expired) {
     await removeMedia(env, job);

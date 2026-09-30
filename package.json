@@ -15,6 +15,9 @@
     "setup": "node scripts/admin.mjs setup",
     "status": "node scripts/admin.mjs status",
     "secrets:status": "node scripts/secret-status.mjs",
+    "owner:start": "node scripts/owner.mjs start",
+    "owner:status": "node scripts/owner.mjs status",
+    "owner:finish": "node scripts/owner.mjs finish",
     "meta:diagnose": "node scripts/admin.mjs meta:diagnose",
     "meta:subscribe": "node scripts/admin.mjs meta:subscribe",
     "db:remote": "wrangler d1 migrations apply meme-autoposter-jobs --remote"

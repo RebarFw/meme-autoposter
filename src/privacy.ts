@@ -47,7 +47,7 @@ const privacyPolicy = `<!doctype html>
 
   <h2>Storage and retention</h2>
   <p>Temporary videos are deleted after both posts are confirmed as sent, or when they are no longer needed after a known failure. Video access links normally expire after 24 hours. Cleanup removes expired or stuck files, with a separate R2 rule that expires the app's files after two days; physical deletion may take additional time to complete.</p>
-  <p>Stored source message details, media URLs and generated captions are normally removed about two days after a job finishes or is marked for attention. Minimal job hashes, recipient and channel IDs, publication records and error codes are retained to prevent duplicates and support operation. Credentials are retained until the owner replaces or removes them. Service logs and provider backups follow the applicable service's retention settings.</p>
+  <p>Stored source message details, media URLs and generated captions are normally removed about two days after a job finishes or is marked for attention. Minimal job hashes, recipient and channel IDs, publication records and error codes are retained to prevent duplicates and support operation. The one-time sender setup stores a hash of its authorization code and the verified sender ID; this temporary proof is removed after setup completes or its 15-minute validity expires. The approved sender ID and credentials are retained until the owner replaces or removes them. Service logs and provider backups follow the applicable service's retention settings.</p>
   <p>Deleting the app's temporary copy does not delete a video already published on Instagram or TikTok, or copies retained by those services.</p>
 
   <h2>Security and website visits</h2>

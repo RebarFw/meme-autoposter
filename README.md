@@ -4,7 +4,7 @@ Share an authorized Instagram Reel to your meme page by DM. A Cloudflare Worker 
 
 ## Current status
 
-Deployed Worker: [meme-autoposter.meme-autoposter.workers.dev](https://meme-autoposter.meme-autoposter.workers.dev/health). Meta callback: `https://meme-autoposter.meme-autoposter.workers.dev/webhooks/instagram`. Remote health, Meta GET verification and protected admin access were verified on 2026-09-30. Local checks run lint, typechecking and 33 tests; GitHub Actions repeats the checks.
+Deployed Worker: [meme-autoposter.meme-autoposter.workers.dev](https://meme-autoposter.meme-autoposter.workers.dev/health). Meta callback: `https://meme-autoposter.meme-autoposter.workers.dev/webhooks/instagram`. Remote health, Meta GET verification and protected admin access were verified on 2026-09-30. Local checks run lint, typechecking and Workers-runtime tests; GitHub Actions repeats the checks.
 
 Public privacy policy: [Meme Autoposter Privacy Policy](https://meme-autoposter.meme-autoposter.workers.dev/privacy). Use this URL in Meta's Privacy Policy URL field. The page describes the app's current data processing, retention, service providers and how to contact the account owner about deletion.
 
@@ -63,11 +63,13 @@ Then securely enter the secrets:
 npx wrangler secret put BUFFER_API_KEY
 npx wrangler secret put META_APP_SECRET
 npx wrangler secret put META_ACCESS_TOKEN
-npx wrangler secret put OWNER_IG_SENDER_ID
 npm run setup
+npm run owner:start
 ```
 
-`META_ACCESS_TOKEN` should be the meme account's Instagram User access token with `instagram_business_basic` and `instagram_business_manage_messages`. Use the Instagram app secret associated with that token's app. The sender ID is the **Instagram-scoped sender ID in the actual inbound messaging webhook**, not a username, Buffer channel ID, or an arbitrary profile ID. It is checked as an exact match. Do not paste any secret into chat or commit it.
+Send the exact one-time message printed by `owner:start` **from your approved personal Instagram account** to the indicated meme page. It expires after 15 minutes. Then run `npm run owner:finish`: the authenticated installer reads the sender ID verified by Meta's signature, uploads it as `OWNER_IG_SENDER_ID` through Wrangler standard input, and removes the temporary setup proof. The setup DM creates no publishing job. `npm run owner:status` checks delivery without printing the sender ID. A new `owner:start` invalidates the previous message; an already configured owner cannot be rebound through this flow.
+
+`META_ACCESS_TOKEN` should be the meme account's Instagram User access token with `instagram_business_basic` and `instagram_business_manage_messages`. Use the Instagram app secret associated with that token's app. The sender ID is the **Instagram-scoped sender ID in the actual inbound messaging webhook**, not a username, Buffer channel ID, or an arbitrary profile ID. It is checked as an exact match. The setup flow discovers it from your authorization DM; you do not need to find it manually. Do not paste any API credential into chat or commit it.
 
 If Ctrl+V in Wrangler's masked prompt stores a control character instead of pasting, copy the token and use PowerShell standard input: `Get-Clipboard -Raw | npx wrangler secret put META_ACCESS_TOKEN`. The command does not display the token. Never print clipboard contents or put a token directly in a shell command.
 
@@ -133,7 +135,7 @@ npm run db:local
 npm run dev
 ```
 
-`GET /health` is public. `GET` and `POST /webhooks/instagram` perform verification and ingest signed DMs. `/media/<job-hash>.mp4` is capability protected. `POST /admin/setup`, `GET /admin/status`, `GET /admin/meta/diagnose` and `POST /admin/meta/subscribe` require `ADMIN_TOKEN`. The local admin CLI reads its ignored token automatically. Status returns fixed error codes and post IDs, never source URLs or secrets. Structured logs likewise contain hashes, provider names, fixed codes and post IDs only; request invocation logging is disabled to avoid logging temporary URL tokens.
+`GET /health` is public. `GET` and `POST /webhooks/instagram` perform verification and ingest signed DMs. `/media/<job-hash>.mp4` is capability protected. `POST /admin/setup`, `GET /admin/status`, `GET /admin/meta/diagnose`, `POST /admin/meta/subscribe`, and the `/admin/owner/start`, `/admin/owner/status`, `/admin/owner/finish` operations require `ADMIN_TOKEN`. The local admin CLI reads its ignored token automatically. Status returns fixed error codes and post IDs, never source URLs or secrets. The one-time setup stores only a hash of its code, expires after 15 minutes, and records a sender only after signature validation. Structured logs likewise contain hashes, provider names, fixed codes and post IDs only; request invocation logging is disabled to avoid logging temporary URL tokens.
 
 `npm run check` runs ESLint, TypeScript and Vitest inside the actual Workers runtime with local D1/R2. Tests mock Meta/Buffer HTTP responses; they never post to your real channels. GitHub Actions repeats checks and the Wrangler bundle dry run. See `docs/testing.md` for live acceptance checks and `docs/api-contracts.md` for official API references.
 

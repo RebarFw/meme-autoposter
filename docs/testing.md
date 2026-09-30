@@ -8,7 +8,7 @@
 
 ## Real acceptance test after setup
 
-1. Keep Meta in development; authorize owned accounts/testers; configure the deployed callback and `messages` field. Enter Worker secrets securely, then run `npm run setup`.
+1. Keep Meta in development; authorize owned accounts/testers; configure the deployed callback and `messages` field. Enter Worker secrets securely, then run `npm run setup`. Run `npm run owner:start`, send its one-time message from the approved personal account to the meme page, and run `npm run owner:finish` to install the verified sender securely. This tests real signed webhook delivery without creating posts.
 2. Share one short MP4 Reel that you own or have permission to repost from the approved personal account to the meme page. Record the D1 job hash using `npm run status`.
 3. Confirm exactly one Buffer create per channel, both with immediate mode. Confirm both actual network posts, and final `completed` with both Buffer `sent` statuses.
 4. Verify its R2 object is gone after both publications. Sending/retrying the same signed Meta event must leave the same job/post IDs.

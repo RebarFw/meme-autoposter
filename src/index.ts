@@ -2,6 +2,7 @@ import { BufferClient } from './buffer';
 import { enqueue, maintenance, processJob, saveSetting, settings } from './jobs';
 import { metaRequest, parseMessages } from './meta';
 import { diagnoseMeta } from './meta-diagnostics';
+import { acceptOwnerSetup, finishOwnerSetup, ownerSetupStatus, startOwnerSetup } from './owner-setup';
 import { serveMedia } from './media';
 import { privacyResponse } from './privacy';
 import { constantTimeEqual, limitedBytes, validSignature } from './security';
@@ -12,6 +13,9 @@ const json = (value: unknown, status = 200) => Response.json(value, { status, he
 async function admin(request: Request, env: Env, path: string): Promise<Response> {
   const auth = request.headers.get('authorization') ?? '';
   if (!env.ADMIN_TOKEN || !auth.startsWith('Bearer ') || !await constantTimeEqual(auth.slice(7), env.ADMIN_TOKEN)) return json({ error: 'unauthorized' }, 401);
+  if (path === '/admin/owner/start' && request.method === 'POST') return json(await startOwnerSetup(env));
+  if (path === '/admin/owner/status' && request.method === 'GET') return json(await ownerSetupStatus(env));
+  if (path === '/admin/owner/finish' && request.method === 'POST') { await finishOwnerSetup(env); return json({ installed: true }); }
   if (path === '/admin/meta/diagnose' && request.method === 'GET') return json(await diagnoseMeta(env));
   if (path === '/admin/meta/subscribe' && request.method === 'POST') return json(await diagnoseMeta(env, true));
   if (path === '/admin/setup' && request.method === 'POST') {
@@ -66,6 +70,7 @@ export default {
       if (!await validSignature(body, request.headers.get('x-hub-signature-256'), env.META_APP_SECRET)) return json({ error: 'invalid_signature' },403);
       let payload: unknown;
       try { payload = JSON.parse(new TextDecoder().decode(body)); } catch { return json({ error: 'invalid_json' },400); }
+      if (await acceptOwnerSetup(env, payload)) return json({ received: true, ownerSetup: true });
       const recipients = await settings<string[]>(env, 'recipient_ids');
       if (!env.OWNER_IG_SENDER_ID || !env.BUFFER_API_KEY || !env.PUBLIC_BASE_URL || !recipients || env.REPOST_PERMISSION_CONFIRMED !== 'true') return json({ error: 'publishing_not_configured' },503);
       const sources = parseMessages(payload, env.OWNER_IG_SENDER_ID, recipients);
