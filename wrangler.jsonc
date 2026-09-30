@@ -4,21 +4,39 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-30",
   "workers_dev": true,
-  "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "meme-autoposter-media" }],
-  "d1_databases": [{
-    "binding": "DB",
-    "database_name": "meme-autoposter-jobs",
-    "database_id": "00000000-0000-0000-0000-000000000000",
-    "migrations_dir": "migrations"
-  }],
-  "triggers": { "crons": ["* * * * *"] },
-  "observability": { "enabled": true, "head_sampling_rate": 1, "logs": { "invocation_logs": false } },
+  "r2_buckets": [
+    {
+      "binding": "MEDIA",
+      "bucket_name": "meme-autoposter-media"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "meme-autoposter-jobs",
+      "database_id": "1b806c2e-6ced-4845-a694-3fbf13af0b79",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "* * * * *"
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "invocation_logs": false
+    }
+  },
   "vars": {
     "META_API_VERSION": "v26.0",
     "MAX_VIDEO_BYTES": "26214400",
     "MEDIA_TTL_SECONDS": "86400",
     "ENABLE_OWNER_DM": "false",
     "ALLOW_PUBLIC_PAGE_DOWNLOADER": "true",
-    "REPOST_PERMISSION_CONFIRMED": "true"
+    "REPOST_PERMISSION_CONFIRMED": "true",
+    "PUBLIC_BASE_URL": "https://meme-autoposter.meme-autoposter.workers.dev"
   }
 }

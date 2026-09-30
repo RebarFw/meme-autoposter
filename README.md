@@ -4,6 +4,8 @@ Share an authorized Instagram Reel to your meme page by DM. A Cloudflare Worker 
 
 ## Current status
 
+Deployed Worker: [meme-autoposter.meme-autoposter.workers.dev](https://meme-autoposter.meme-autoposter.workers.dev/health). Meta callback: `https://meme-autoposter.meme-autoposter.workers.dev/webhooks/instagram`. Remote health, Meta GET verification and protected admin access were verified on 2026-09-30. All 25 local tests and the GitHub checks passed.
+
 The complete Worker, D1 migration, downloader interface, deployment tooling and automated tests are implemented. Real account posting requires the Worker secrets, Buffer channel discovery, Meta account subscription and a real authorized Reel test. A successful automated test or deployment does **not** prove that Meta can deliver a particular third-party Reel's video. Keep the Meta app in development mode; no App Review or app publication is needed for this stage.
 
 ## Architecture
@@ -40,6 +42,8 @@ npm run deploy
 Deployment verifies the existing `meme-autoposter-media` bucket, creates or reuses the free-tier D1 database, applies migrations, deploys the Worker and records its real URL in `wrangler.jsonc`. It generates `ADMIN_TOKEN` and `META_VERIFY_TOKEN`, uploads them through Wrangler stdin, and stores local copies under ignored `.secrets/`. It never enables paid Cloudflare products or creates a public R2 bucket. `MEDIA` is bound to `meme-autoposter-media`; `DB` is bound to `meme-autoposter-jobs`.
 
 The deployment script verifies `/health` and the Meta GET handshake remotely. The first deploy is deliberately unable to publish until secrets and account discovery are configured.
+
+For a newly registered `workers.dev` subdomain, DNS/TLS provisioning may take a few minutes. Deployment verification retries automatically. `npm run verify:deployment` repeats the remote checks without redeploying or changing secrets.
 
 ## Meta dashboard: first external setup step
 

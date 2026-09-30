@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { wrangler } from './wrangler.mjs';
+import { verifyDeployment } from './verify-deployment.mjs';
 
 try {
   const auth = wrangler(['whoami'], { capture: true });
@@ -42,14 +43,7 @@ try {
   wrangler(['secret','put','META_VERIFY_TOKEN'], { input: readFileSync(verifyPath,'utf8') });
   mkdirSync('.local',{ recursive: true });
   writeFileSync('.local/deployment.json', JSON.stringify({ url, webhook: `${url}/webhooks/instagram` },null,2));
-  const health = await fetch(`${url}/health`);
-  if (!health.ok || !(await health.json()).ok) throw new Error('Deployed health check failed.');
-  const verify = new URL(`${url}/webhooks/instagram`);
-  verify.searchParams.set('hub.mode','subscribe');
-  verify.searchParams.set('hub.challenge','deployment-check');
-  verify.searchParams.set('hub.verify_token',readFileSync(verifyPath,'utf8'));
-  const handshake = await fetch(verify);
-  if (!handshake.ok || await handshake.text() !== 'deployment-check') throw new Error('Deployed Meta verification failed.');
+  await verifyDeployment(url);
   console.log(`Verified health: ${url}/health\nMeta callback URL: ${url}/webhooks/instagram`);
 } catch (error) {
   console.error(error.message);
