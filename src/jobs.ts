@@ -24,6 +24,24 @@ export async function enqueue(env: Env, source: ReelSource): Promise<string> {
   return jobId;
 }
 
+export async function retryDownload(env: Env, id: string): Promise<void> {
+  if (!/^[a-f0-9]{64}$/.test(id)) throw new AppError('invalid_job_id');
+  const job = await env.DB.prepare('SELECT * FROM jobs WHERE id=?').bind(id).first<Job>();
+  if (!job?.source_json || !env.OWNER_IG_SENDER_ID) throw new AppError('download_retry_not_safe');
+  const source: ReelSource = JSON.parse(job.source_json);
+  const recipients = await settings<string[]>(env, 'recipient_ids');
+  if (source.senderId !== env.OWNER_IG_SENDER_ID || !recipients?.includes(source.recipientId) || !Number.isFinite(source.timestamp) || source.timestamp < Date.now() - 48 * 3600_000) throw new AppError('download_retry_not_safe');
+  // Reuse the same permanent job. A Buffer reservation of ANY state makes
+  // this operation unavailable; uncertain submissions must be reconciled.
+  const now = Date.now();
+  const result = await env.DB.prepare(`UPDATE jobs SET state='pending',error_code=NULL,attempts=0,next_run_at=?,lease_token=NULL,lease_until=0,updated_at=?
+    WHERE id=? AND state='attention' AND object_key IS NULL AND lease_until<=? AND source_json=?
+    AND NOT EXISTS (SELECT 1 FROM deliveries WHERE job_id=?)`)
+    .bind(now, now, id, now, job.source_json, id).run();
+  if (!result.meta.changes) throw new AppError('download_retry_not_safe');
+  log('download_retry_queued', { job: id });
+}
+
 export async function claimJob(env: Env, id: string, now = Date.now()): Promise<Job | null> {
   const lease = crypto.randomUUID();
   return env.DB.prepare(`UPDATE jobs SET lease_token=?, lease_until=?, updated_at=?

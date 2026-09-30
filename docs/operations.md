@@ -12,6 +12,14 @@ Do not reset `unknown` or `submitting` to `pending`. Check the appropriate Buffe
 
 Buffer publication failures may require reconnecting the channel or correcting a video's codec/duration. These are recorded separately; an accepted post on the other network is never recreated. Do not resend content until you have checked both actual channels.
 
+## Download failure before Buffer
+
+`npm run download:diagnose` returns only structural public-page facts for the latest job; `-- post` and `-- embed` inspect alternative public routes. It never returns URLs, page contents or credentials, and does not upload or post. `npm run polling:validate` also reports safe structure and actual Meta errors for the latest message's share/attachment fields.
+
+After fixing a provider/key, use `npm run retry:download` (latest job) or `npm run retry:download -- JOB_HASH`. This queues the same job only if it belongs to the current exact owner/recipient, is within 48 hours, is in `attention`, has no R2 object or active lease, and has no delivery record of any state. It resets download attempts only; permanent message deduplication remains. Cron performs the retry. Never delete delivery reservations to make this command succeed.
+
+The optional Apify provider consumes shared Free-plan credits. `settings.apify_usage` tracks at most 40 attempted runs per UTC calendar month; reservations occur before external calls and are not refunded on errors. Every run is capped at $0.05, one requested Reel, with paid add-ons disabled. A missing key makes this provider inactive; exhausted credits or budget fail closed. No paid subscription is enabled by the app.
+
 ## Cleanup and bucket lifecycle
 
 The Worker deletes media promptly after both `sent` statuses, or after known failures no longer need it. Hard link expiry is 24 hours by default, capped at 48 hours. Minute cron cleanup and an hourly orphan sweep delete objects. Only the `meme-autoposter/` prefix is owned by this app.

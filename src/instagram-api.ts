@@ -1,4 +1,5 @@
 import { metaRequest, parseMessages } from './meta';
+import { reelUrl } from './security';
 import { AppError, type Env, type ReelSource } from './types';
 
 export type ApiObject = Record<string, unknown>;
@@ -25,7 +26,7 @@ export async function apiMessageList(env: Env, conversationId: string): Promise<
 }
 
 export async function apiMessage(env: Env, messageId: string, shares = false): Promise<ApiObject> {
-  const fields = 'id,created_time,from,to,message' + (shares ? ',shares{type,url,id,name}' : '');
+  const fields = 'id,created_time,from,to,message' + (shares ? ',shares{link,type,url,id,name}' : '');
   return metaRequest<ApiObject>(env, `${encodeURIComponent(messageId)}?fields=${fields}`);
 }
 
@@ -34,10 +35,14 @@ export function parseApiMessage(message: ApiObject, owner: string, recipients: s
   const recipient = apiItems(message.to).find(item => typeof item.id === 'string' && recipients.includes(item.id));
   const timestamp = apiTimestamp(message.created_time);
   if (sender.id !== owner || !recipient || !apiId(message.id) || !Number.isFinite(timestamp) || timestamp < since || timestamp > now + 300_000) return [];
-  const attachments = apiItems(message.shares).filter(share => ['post', 'reel', 'ig_post', 'ig_reel'].includes(String(share.type))).map(share => ({
-    type: share.type === 'post' ? 'ig_post' : share.type,
-    payload: { url: share.url, ig_post_media_id: share.id, title: share.name },
-  }));
+  // Instagram Login's actual Reel response uses shares.data[].link even
+  // when the generic Message reference's url/type fields are omitted.
+  const attachments = apiItems(message.shares).filter(share => ['post', 'reel', 'ig_post', 'ig_reel'].includes(String(share.type)) || (!share.type && !!reelUrl(share.link))).flatMap(share => {
+    const link = reelUrl(share.link);
+    const type = share.type === 'post' ? 'ig_post' : share.type ?? 'reel';
+    const payload = { url: share.url ?? link, ig_post_media_id: share.id, title: share.name };
+    return [{ type, payload }, ...(link && share.url ? [{ type: 'share', payload: { ...payload, url: link } }] : [])];
+  });
   const parsed = parseMessages({ object: 'instagram', entry: [{ id: recipient.id, messaging: [{
     sender: { id: sender.id }, recipient: { id: recipient.id }, timestamp,
     message: { mid: message.id, text: message.message, attachments },

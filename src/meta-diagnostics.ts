@@ -30,7 +30,7 @@ interface ApiResult {
   error?: { code?: number; subcode?: number; type?: string; message?: string; transient?: boolean; traceId?: string };
 }
 
-async function inspect(env: Env, path: string, init: RequestInit = {}): Promise<ApiResult> {
+export async function inspect(env: Env, path: string, init: RequestInit = {}): Promise<ApiResult> {
   const token = metaAccessToken(env);
   if (!/^v\d+\.0$/.test(env.META_API_VERSION)) throw new AppError('invalid_meta_version');
   let response: Response;
@@ -61,7 +61,7 @@ async function inspect(env: Env, path: string, init: RequestInit = {}): Promise<
   return { ok: true, httpStatus: response.status, body };
 }
 
-const evidence = (result: ApiResult) => ({ ok: result.ok, httpStatus: result.httpStatus, error: result.error, transport: result.transport });
+export const evidence = (result: ApiResult) => ({ ok: result.ok, httpStatus: result.httpStatus, error: result.error, transport: result.transport });
 function applications(env: Env, result: ApiResult) {
   if (!result.ok || !Array.isArray(result.body.data)) return [];
   return result.body.data.slice(0, 100).map(raw => {

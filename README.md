@@ -10,7 +10,7 @@ Public privacy policy: [Meme Autoposter Privacy Policy](https://meme-autoposter.
 
 The Worker, D1 migration, downloader interface, deployment tooling and automated tests are implemented. On 2026-10-01 the operator authorized API polling to preserve the DM workflow while keeping the app unpublished. Real account posting requires the Worker secrets, Buffer channel discovery, approved sender installation and a real authorized Reel test. A successful automated test or deployment does **not** prove that Meta exposes a particular third-party Reel's downloadable video. The project never publishes your Meta app or submits App Review.
 
-Polling is deployed and active. Meta's API matched the existing setup DM from `@rebarfw` to the configured meme account; its sender ID was securely installed as a Worker secret and the temporary proof removed. Actual owner-filtered conversation/message reads accepted the expanded share fields. The first scan was healthy and created zero jobs from old history. The remaining acceptance step is a new authorized Reel DM and confirmation of both actual publications and cleanup.
+Polling is deployed and active. Meta's API matched the existing setup DM from `@rebarfw` to the configured meme account; its sender ID was securely installed as a Worker secret and the temporary proof removed. The real native Reel test revealed a link-only `shares.data[].link` response. The parser now handles that response and recovered the same DM as one durable job. Anonymous public Reel/post/embed requests returned HTML without video data, so this job stopped before any Buffer submission and its temporary media metadata was cleaned. An optional Apify adapter is implemented and awaits a securely supplied key; real video acquisition, both publications and final cleanup are still unverified.
 
 ## Architecture
 
@@ -101,6 +101,9 @@ The `VideoDownloader` interface in `src/downloaders.ts` isolates video acquisiti
 2. **Meta Graph:** Fetch authorized media by its ID and require `VIDEO` plus `REELS`/a Reel permalink. Only works for media that the token can access.
 3. **Public page:** For an actual `/reel/` URL, try published `og:video` or embedded `video_url` data. Zero cost, best effort. Does not log into Instagram or bypass access controls. Can be disabled with `ALLOW_PUBLIC_PAGE_DOWNLOADER=false`.
 4. **Optional API:** An adapter for a downloader you choose later. No paid account is provisioned and no unsupported vendor endpoint is assumed.
+5. **Optional Apify:** `DOWNLOADER_PROVIDER=apify` selects Apify's maintained Instagram Reel Scraper once `DOWNLOADER_API_KEY` exists. It sends one canonical Reel URL, requests one result, verifies its exact shortcode, video and Reel type, then downloads only from trusted Meta CDN domains. The credential stays in the API authorization header. No transcript, paid share count or separately stored Apify video is requested. The adapter uses the actual documented Actor contract, separate from the generic API adapter above.
+
+Instagram Login can return a native Reel with only `shares.data[].link`, omitting the generic Message reference's `url`, `id` and `type`. This was verified through the live API on 2026-10-01. A canonical `/reel/` link supplies Reel evidence; unrelated links, declared stories and ambiguous multiple shares remain rejected. Parser upgrades recheck recent cached message hashes while retaining permanent D1 job tombstones.
 
 Current Meta payloads may use `ig_post` for a shared post, with a media ID, title and signed CDN URL. A thumbnail or ambiguous share is **not** assumed to be a Reel. Graph metadata or the optional provider must identify it as a Reel. Legacy `share` payloads and dual attachments are also handled without duplicate jobs. A bare uploaded `video` or a story never triggers posting.
 
@@ -113,6 +116,8 @@ npx wrangler secret put DOWNLOADER_API_KEY
 ```
 
 Our adapter sends `POST` JSON `{ "url": "optional Reel permalink", "mediaId": "optional Meta media ID", "attachmentUrl": "optional signed Meta CDN URL" }`, with `Authorization: Bearer ...` only if a key exists. The provider contract returns `{ "videoUrl": "https://trusted-cdn/video.mp4", "isReel": true }`. This is **our adapter contract**, not a claim about any commercial API. Implement a vendor-specific class if their contract differs. Additional trusted media domains can be configured with comma-separated `DOWNLOADER_MEDIA_HOSTS`; use exact domains you trust, not broad hosting suffixes. All redirects are validated. Secret-bearing API URLs are prohibited.
+
+For the implemented Apify provider, use an [Apify Free account](https://apify.com/pricing) and securely upload its API token as `DOWNLOADER_API_KEY`. Do not set `DOWNLOADER_API_URL`; the provider has a fixed official endpoint. The current Free plan includes $5 in monthly usage credits without a card. The adapter caps each Actor run at $0.05 of charges and atomically permits at most 40 runs per UTC calendar month, including failed attempts. Other account usage and storage also consume shared credits; the app never upgrades the plan. Exceeding the adapter's budget stops downloads. See [the Actor input](https://apify.com/apify/instagram-reel-scraper/input-schema), [output](https://apify.com/apify/instagram-reel-scraper/output-schema), and [API](https://apify.com/apify/instagram-reel-scraper/api) contracts. Access to private/restricted media is not promised.
 
 Downloads must return `video/mp4`, a correct `Content-Length`, and an MP4 `ftyp` header. The default maximum is **25 MiB**. The Worker streams through `FixedLengthStream` into R2 and aborts oversized or truncated responses. It does not transcode; Buffer/network codec, duration and aspect-ratio validation can still reject a real MP4.
 
@@ -144,6 +149,7 @@ Optional DM confirmation is off by default. Set `ENABLE_OWNER_DM=true` and redep
 npm run status
 npm run polling:validate
 npm run poll
+npm run download:diagnose
 npx wrangler tail
 npm run db:local
 npm run dev
@@ -152,6 +158,8 @@ npm run dev
 `GET /health` is public. `GET` and `POST /webhooks/instagram` perform verification and authenticate signed DMs. `/media/<job-hash>.mp4` is capability protected. All `/admin/*` operations require `ADMIN_TOKEN`, including setup/status, Meta diagnostics/subscription, sender setup/import/finish, manual `POST /admin/poll`, and read-only `GET /admin/poll/validate`. The local admin CLI reads its ignored token automatically. `polling:validate` checks actual owner-filtered conversation access and message/share fields without publishing. `poll` runs the normal owner-only ingestion when due. Status returns fixed error codes and post IDs, never source URLs or secrets. Setup stores only a code hash and establishes a 15-minute proof through a validated signature or an authenticated administrator's exact API match. Structured logs likewise contain hashes, provider names, fixed codes and post IDs only; request invocation logging is disabled to avoid logging temporary URL tokens.
 
 `npm run check` runs ESLint, TypeScript and Vitest inside the actual Workers runtime with local D1/R2. Tests mock Meta/Buffer HTTP responses; they never post to your real channels. GitHub Actions repeats checks and the Wrangler bundle dry run. See `docs/testing.md` for live acceptance checks and `docs/api-contracts.md` for official API references.
+
+`download:diagnose` inspects the latest job's anonymous public page without posting or returning source URLs/content. Add `-- post` or `-- embed` to check the equivalent public page route. After fixing downloader configuration, `npm run retry:download` queues the latest job's download again; an explicit job hash can be supplied with `-- JOB_HASH`. It retains the same job/tombstone and rejects stale/wrong-owner jobs, existing R2 media, active leases and **any** existing Buffer delivery reservation. A Buffer submission can never be reset through this command.
 
 ## Cost
 

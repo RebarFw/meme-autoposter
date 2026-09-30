@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseApiMessage } from '../src/instagram-api';
 import { pollInstagram, pollingStatus } from '../src/instagram-polling';
 import { importOwnerSetup } from '../src/owner-setup';
-import { saveSetting, settings } from '../src/jobs';
+import { enqueue, processJob, retryDownload, saveSetting, settings } from '../src/jobs';
 import { sha256 } from '../src/security';
 import worker from '../src/index';
 import type { Channel, Env } from '../src/types';
@@ -64,6 +64,14 @@ describe('Meta API message parsing', () => {
     expect(parseApiMessage(message({ shares: { data: [{ type: 'reel', url: 'https://evil.example/video' }] } }), '111', ['444'], 0)).toEqual([]);
     expect(parseApiMessage(message({ shares: { data: [{ type: 'reel', id: 'a', url: 'https://lookaside.fbsbx.com/a' }, { type: 'reel', id: 'b', url: 'https://lookaside.fbsbx.com/b' }] } }), '111', ['444'], 0)).toEqual([]);
   });
+  it('accepts the actual Instagram Login link-only Reel share while rejecting unrelated links and declared stories', () => {
+    const parsed = parseApiMessage(message({ shares: { data: [{ link: 'https://www.instagram.com/reel/ABC_123/?igsh=tracking' }] } }), '111', ['444'], 0);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]).toMatchObject({ kind: 'reel', reelUrl: 'https://www.instagram.com/reel/ABC_123/' });
+    for (const share of [{ link: 'https://evil.example/reel/ABC/' }, { link: 'https://www.instagram.com/p/ABC/' }, { type: 'story', link: 'https://www.instagram.com/reel/ABC/' }]) {
+      expect(parseApiMessage(message({ shares: { data: [share] } }), '111', ['444'], 0)).toEqual([]);
+    }
+  });
 });
 
 describe('durable owner-only polling', () => {
@@ -99,6 +107,31 @@ describe('durable owner-only polling', () => {
     const details = api.fetcher.mock.calls.filter(([url]) => /\/message-\d\?/.test(String(url)));
     expect(details).toHaveLength(1);
     expect(String(details[0]![0])).toContain('/message-2?');
+  });
+  it('rechecks ignored messages after a parser upgrade without recreating existing posts', async () => {
+    const api = mockApi();
+    await pollInstagram(bindings());
+    await env.DB.prepare("UPDATE settings SET value=json_set(value,'$.formatVersion',1,'$.nextAt',0) WHERE key='instagram_poll'").run();
+    await pollInstagram(bindings());
+    expect(api.creates()).toBe(2);
+    expect(await countJobs()).toBe(1);
+    expect(api.fetcher.mock.calls.filter(([url]) => /\/message-1\?/.test(String(url)))).toHaveLength(2);
+  });
+  it('resolves a native link-only share through the optional provider and publishes both channels once', async () => {
+    const api = mockApi([message({ shares: { data: [{ link: 'https://www.instagram.com/reel/ABCdef123/' }] } })]);
+    const original = api.fetcher.getMockImplementation()!;
+    api.fetcher.mockImplementation(async (input, init) => {
+      if (String(input).includes('www.instagram.com/reel/')) return new Response('<html></html>');
+      if (String(input).includes('api.apify.com')) return Response.json([{ shortCode: 'ABCdef123', type: 'Video', productType: 'clips', videoUrl: 'https://lookaside.fbsbx.com/reel.mp4' }]);
+      return original(input, init);
+    });
+    const configured: Env = { ...bindings(), DOWNLOADER_PROVIDER: 'apify', DOWNLOADER_API_KEY: 'fake-apify-api-key' };
+    await pollInstagram(configured);
+    await due();
+    await pollInstagram(configured);
+    expect(api.creates()).toBe(2);
+    expect(await countJobs()).toBe(1);
+    expect(api.fetcher.mock.calls.filter(([url]) => String(url).includes('api.apify.com'))).toHaveLength(1);
   });
   it('ignores stranger DMs even if Meta returns them in the owner-filtered conversation', async () => {
     const api = mockApi([message({ from: { id: '999', username: 'stranger' } })]);
@@ -170,11 +203,36 @@ describe('authenticated API owner identification', () => {
   });
   it('protects owner import and polling controls with admin authorization', async () => {
     const fetcher = vi.spyOn(globalThis, 'fetch');
-    for (const [path, method] of [['owner/import', 'POST'], ['poll', 'POST'], ['poll/validate', 'GET']]) {
+    for (const [path, method] of [['owner/import', 'POST'], ['poll', 'POST'], ['poll/validate', 'GET'], ['download/diagnose', 'GET'], ['jobs/retry-download', 'POST']]) {
       const ctx = createExecutionContext();
       const response = await worker.fetch(new Request('https://worker.example/admin/' + path, { method }), bindings(), ctx);
       expect(response.status).toBe(401);
     }
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe('safe pre-publication download recovery', () => {
+  it('reuses the original job and prevents retries after any Buffer reservation', async () => {
+    const api = mockApi();
+    const source = parseApiMessage(message(), '111', ['222', '444'], 0)[0]!;
+    const id = await enqueue(bindings(), source);
+    await env.DB.prepare("UPDATE jobs SET state='attention', error_code='no_downloader_could_resolve_reel' WHERE id=?").bind(id).run();
+    await retryDownload(bindings(), id);
+    await processJob(bindings(), id);
+    expect(await countJobs()).toBe(1);
+    expect(api.creates()).toBe(2);
+    await env.DB.prepare("UPDATE jobs SET state='attention',object_key=NULL WHERE id=?").bind(id).run();
+    await expect(retryDownload(bindings(), id)).rejects.toThrow('download_retry_not_safe');
+    expect(api.creates()).toBe(2);
+  });
+  it('rejects stale jobs and jobs belonging to a different sender', async () => {
+    const source = parseApiMessage(message(), '111', ['222', '444'], 0)[0]!;
+    for (const override of [{ senderId: '999' }, { timestamp: Date.now() - 49 * 3600_000 }]) {
+      const id = await enqueue(bindings(), { ...source, ...override, messageId: crypto.randomUUID() });
+      await env.DB.prepare("UPDATE jobs SET state='attention' WHERE id=?").bind(id).run();
+      await expect(retryDownload(bindings(), id)).rejects.toThrow('download_retry_not_safe');
+    }
+    expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM deliveries').first('n')).toBe(0);
   });
 });

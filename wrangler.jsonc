@@ -32,6 +32,7 @@
   },
   "vars": {
     "INGEST_MODE": "polling",
+    "DOWNLOADER_PROVIDER": "apify",
     "META_API_VERSION": "v26.0",
     "MAX_VIDEO_BYTES": "26214400",
     "MEDIA_TTL_SECONDS": "86400",

@@ -8,6 +8,7 @@ export interface Env {
   OWNER_IG_SENDER_ID?: string;
   ADMIN_TOKEN?: string;
   DOWNLOADER_API_KEY?: string;
+  DOWNLOADER_PROVIDER?: 'apify';
   DOWNLOADER_API_URL?: string;
   DOWNLOADER_MEDIA_HOSTS?: string;
   INGEST_MODE?: 'webhook' | 'polling';

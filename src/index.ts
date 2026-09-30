@@ -1,5 +1,6 @@
 import { BufferClient } from './buffer';
-import { enqueue, maintenance, processJob, saveSetting, settings } from './jobs';
+import { diagnoseDownload } from './download-diagnostics';
+import { enqueue, maintenance, processJob, retryDownload, saveSetting, settings } from './jobs';
 import { metaRequest, parseMessages } from './meta';
 import { diagnoseMeta } from './meta-diagnostics';
 import { acceptOwnerSetup, diagnoseOwnerSetup, finishOwnerSetup, importOwnerSetup, ownerSetupStatus, startOwnerSetup } from './owner-setup';
@@ -21,6 +22,15 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
   if (path === '/admin/owner/finish' && request.method === 'POST') { await finishOwnerSetup(env); return json({ installed: true }); }
   if (path === '/admin/poll' && request.method === 'POST') { await pollInstagram(env); return json(await pollingStatus(env)); }
   if (path === '/admin/poll/validate' && request.method === 'GET') return json(await validatePolling(env));
+  if (path === '/admin/jobs/retry-download' && request.method === 'POST') {
+    const body = JSON.parse(new TextDecoder().decode(await limitedBytes(request.body, 1024)));
+    await retryDownload(env, typeof body?.jobId === 'string' ? body.jobId : '');
+    return json({ queued: true, jobId: body.jobId });
+  }
+  if (path === '/admin/download/diagnose' && request.method === 'GET') {
+    const route = new URL(request.url).searchParams.get('route');
+    return json(await diagnoseDownload(env, route === 'post' || route === 'embed' ? route : 'reel'));
+  }
   if (path === '/admin/meta/diagnose' && request.method === 'GET') return json(await diagnoseMeta(env));
   if (path === '/admin/meta/subscribe' && request.method === 'POST') return json(await diagnoseMeta(env, true));
   if (path === '/admin/setup' && request.method === 'POST') {

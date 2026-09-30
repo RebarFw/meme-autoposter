@@ -22,6 +22,8 @@
     "owner:import": "node scripts/owner.mjs import",
     "poll": "node scripts/admin.mjs poll",
     "polling:validate": "node scripts/admin.mjs polling:validate",
+    "download:diagnose": "node scripts/admin.mjs download:diagnose",
+    "retry:download": "node scripts/retry-download.mjs",
     "meta:diagnose": "node scripts/admin.mjs meta:diagnose",
     "meta:subscribe": "node scripts/admin.mjs meta:subscribe",
     "db:remote": "wrangler d1 migrations apply meme-autoposter-jobs --remote"

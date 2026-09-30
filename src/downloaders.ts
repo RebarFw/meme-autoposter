@@ -12,6 +12,14 @@ export interface VideoDownloader {
   download(source: ReelSource, env: Env): Promise<DownloadedVideo>;
 }
 
+// Anonymous public-page metadata requests need a supported web client header;
+// the default runtime client can be redirected to an unsupported-browser page.
+// No login cookies or account credentials are used for this provider.
+export const PUBLIC_PAGE_HEADERS = {
+  Accept: 'text/html',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
+};
+
 async function videoAt(url: string, hosts: string[], provider: string): Promise<DownloadedVideo> {
   const response = await safeFetch(url, hosts);
   if (!response.ok) { await response.body?.cancel(); throw new AppError(`download_http_${response.status}`, response.status >= 500 || response.status === 429); }
@@ -48,7 +56,7 @@ export class PublicPageDownloader implements VideoDownloader {
   readonly name = 'instagram-public-page';
   supports(source: ReelSource, env: Env): boolean { return !!source.reelUrl && env.ALLOW_PUBLIC_PAGE_DOWNLOADER === 'true'; }
   async download(source: ReelSource): Promise<DownloadedVideo> {
-    const response = await safeFetch(source.reelUrl!, ['instagram.com'], { headers: { Accept: 'text/html' } });
+    const response = await safeFetch(source.reelUrl!, ['instagram.com'], { headers: PUBLIC_PAGE_HEADERS });
     if (!response.ok) { await response.body?.cancel(); throw new AppError('public_page_unavailable', response.status === 429 || response.status >= 500); }
     const html = new TextDecoder().decode(await limitedBytes(response.body, 1_500_000));
     const metaTags = html.match(/<meta\b[^>]*>/gi) ?? [];
@@ -90,7 +98,47 @@ export class ApiVideoDownloader implements VideoDownloader {
   }
 }
 
-export const providers: VideoDownloader[] = [new MetaAttachmentDownloader(), new MetaGraphDownloader(), new PublicPageDownloader(), new ApiVideoDownloader()];
+export class ApifyVideoDownloader implements VideoDownloader {
+  readonly name = 'apify-instagram-reel';
+  supports(source: ReelSource, env: Env): boolean { return env.DOWNLOADER_PROVIDER === 'apify' && !!env.DOWNLOADER_API_KEY && !!reelUrl(source.reelUrl); }
+  async download(source: ReelSource, env: Env): Promise<DownloadedVideo> {
+    const url = reelUrl(source.reelUrl);
+    if (!url || env.DOWNLOADER_PROVIDER !== 'apify' || !env.DOWNLOADER_API_KEY) throw new AppError('apify_not_configured');
+    const token = env.DOWNLOADER_API_KEY.trim();
+    if (!/^[A-Za-z0-9_-]{10,256}$/.test(token)) throw new AppError('invalid_downloader_key_format');
+    // Reserve before the external request. Atomic monthly and per-run ceilings
+    // bound consumption of free credits, including failed/retried downloads.
+    const month = new Date().toISOString().slice(0, 7);
+    const reserved = await env.DB.prepare(`INSERT INTO settings(key,value) VALUES ('apify_usage',?)
+      ON CONFLICT(key) DO UPDATE SET value=json_set(settings.value,'$.month',?,'$.runs',
+        CASE WHEN json_extract(settings.value,'$.month')=? THEN COALESCE(json_extract(settings.value,'$.runs'),0)+1 ELSE 1 END)
+      WHERE json_extract(settings.value,'$.month')<>? OR COALESCE(json_extract(settings.value,'$.runs'),0)<40
+      RETURNING value`).bind(JSON.stringify({ month, runs: 1 }), month, month, month).first();
+    if (!reserved) throw new AppError('downloader_monthly_budget_exhausted');
+    const query = new URLSearchParams({ timeout: '60', maxTotalChargeUsd: '0.05', maxItems: '1', limit: '1', clean: 'true', fields: 'shortCode,type,productType,videoUrl' });
+    let response: Response;
+    try {
+      response = await fetch('https://api.apify.com/v2/actors/apify~instagram-reel-scraper/run-sync-get-dataset-items?' + query, {
+        method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(70_000),
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        // These are the current Actor's documented inputs. No profile crawl,
+        // transcript, paid shares feature or separately stored video copy.
+        body: JSON.stringify({ username: [url], resultsLimit: 1, includeSharesCount: false, includeTranscript: false, includeDownloadedVideo: false }),
+      });
+    } catch { throw new AppError('apify_network_error', true); }
+    if (!response.ok) { await response.body?.cancel(); throw new AppError(`apify_http_${response.status}`, response.status === 408 || response.status === 429 || response.status >= 500); }
+    let items: unknown;
+    try { items = JSON.parse(new TextDecoder().decode(await limitedBytes(response.body, 128_000))); }
+    catch { throw new AppError('apify_invalid_response'); }
+    if (!Array.isArray(items) || items.length !== 1) throw new AppError('apify_reel_not_found');
+    const item = items[0];
+    if (!item || typeof item !== 'object' || item.shortCode !== new URL(url).pathname.split('/')[2] || item.type !== 'Video' || item.productType !== 'clips' || typeof item.videoUrl !== 'string') throw new AppError('apify_result_not_requested_reel');
+    // The key is sent only to Apify; media downloads never inherit its headers.
+    return videoAt(item.videoUrl, META_MEDIA_HOSTS, this.name);
+  }
+}
+
+export const providers: VideoDownloader[] = [new MetaAttachmentDownloader(), new MetaGraphDownloader(), new PublicPageDownloader(), new ApiVideoDownloader(), new ApifyVideoDownloader()];
 
 export async function downloadVideo(source: ReelSource, env: Env, jobId: string): Promise<DownloadedVideo> {
   let retryable = false;
