@@ -63,7 +63,9 @@ export async function limitedBytes(body: ReadableStream<Uint8Array> | null, max:
 export async function safeFetch(raw: string, hosts: string[], init: RequestInit = {}): Promise<Response> {
   let url = secureUrl(raw, hosts);
   for (let i = 0; i < 4; i++) {
-    const response = await fetch(url.toString(), { ...init, redirect: 'manual', signal: init.signal ?? AbortSignal.timeout(20_000) });
+    let response: Response;
+    try { response = await fetch(url.toString(), { ...init, redirect: 'manual', signal: init.signal ?? AbortSignal.timeout(20_000) }); }
+    catch { throw new AppError('download_network_error', true); }
     if (![301,302,303,307,308].includes(response.status)) return response;
     const location = response.headers.get('location');
     await response.body?.cancel();
