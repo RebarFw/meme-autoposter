@@ -56,7 +56,7 @@ describe('one-time approved sender setup', () => {
   it('rejects forged signatures and authentic DMs with the wrong challenge', async () => {
     const challenge = await start();
     expect((await send(payload(challenge.message), false)).status).toBe(403);
-    expect((await send(payload('meme-setup:' + '0'.repeat(64)))).status).toBe(503);
+    expect((await send(payload('meme-setup:' + '0'.repeat(64)))).status).toBe(200);
     expect((await status()).matched).toBe(false);
   });
   it('uses a signed challenge DM to identify a sender without publishing or exposing the ID publicly', async () => {
@@ -78,7 +78,7 @@ describe('one-time approved sender setup', () => {
     invalid[1]!.entry[0]!.messaging[0]!.recipient.id = '999';
     invalid[2]!.entry[0]!.messaging[0]!.timestamp -= 60_000;
     invalid[3]!.entry[0]!.messaging[0]!.message.mid = '';
-    for (const body of invalid) expect((await send(body)).status).toBe(503);
+    for (const body of invalid) expect((await send(body)).status).toBe(200);
     expect((await status()).matched).toBe(false);
   });
   it('keeps exactly one sender when deliveries race and acknowledges duplicate delivery', async () => {
@@ -87,21 +87,21 @@ describe('one-time approved sender setup', () => {
     const winner = (await status()).senderId;
     expect(['111', '333']).toContain(winner);
     expect((await send(payload(challenge.message, winner))).status).toBe(200);
-    expect((await send(payload(challenge.message, winner === '111' ? '333' : '111'))).status).toBe(503);
+    expect((await send(payload(challenge.message, winner === '111' ? '333' : '111'))).status).toBe(200);
     expect((await status()).senderId).toBe(winner);
   });
   it('invalidates an old challenge when an authenticated operator starts again', async () => {
     const old = await start();
     vi.restoreAllMocks();
     const current = await start();
-    expect((await send(payload(old.message))).status).toBe(503);
+    expect((await send(payload(old.message))).status).toBe(200);
     expect((await status()).matched).toBe(false);
     expect((await send(payload(current.message))).status).toBe(200);
   });
   it('rejects expired challenges and removes their proof during cleanup', async () => {
     const challenge = await start();
     await env.DB.prepare("UPDATE settings SET value=json_set(value, '$.expiresAt', ?) WHERE key='owner_setup'").bind(Date.now() - 1).run();
-    expect((await send(payload(challenge.message))).status).toBe(503);
+    expect((await send(payload(challenge.message))).status).toBe(200);
     expect((await status()).expired).toBe(true);
     await maintenance(unconfigured());
     expect(await settings(unconfigured(), 'owner_setup')).toBeNull();

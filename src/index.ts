@@ -69,12 +69,20 @@ export default {
       if (Number(request.headers.get('content-length')) > 256_000) return json({ error: 'body_too_large' },413);
       const body = await limitedBytes(request.body, 256_000);
       if (!await validSignature(body, request.headers.get('x-hub-signature-256'), env.META_APP_SECRET)) { log('webhook_signature_rejected'); return json({ error: 'invalid_signature' },403); }
+      log('webhook_authenticated');
       let payload: unknown;
       try { payload = JSON.parse(new TextDecoder().decode(body)); } catch { return json({ error: 'invalid_json' },400); }
       if (await acceptOwnerSetup(env, payload)) return json({ received: true, ownerSetup: true });
+      // Until an owner is explicitly installed, no inbound event is authorized
+      // to publish. Acknowledge synthetic tests and irrelevant notifications;
+      // making Meta retry these cannot improve setup and creates a retry storm.
+      if (!env.OWNER_IG_SENDER_ID) return json({ received: true, publishingReady: false });
       const recipients = await settings<string[]>(env, 'recipient_ids');
-      if (!env.OWNER_IG_SENDER_ID || !env.BUFFER_API_KEY || !env.PUBLIC_BASE_URL || !recipients || env.REPOST_PERMISSION_CONFIRMED !== 'true') return json({ error: 'publishing_not_configured' },503);
+      if (!recipients) return json({ error: 'publishing_not_configured' },503);
       const sources = parseMessages(payload, env.OWNER_IG_SENDER_ID, recipients);
+      // Only an approved, relevant Reel needs a retry during a configuration
+      // outage. Stranger DMs and synthetic samples always create zero jobs.
+      if (sources.length && (!env.BUFFER_API_KEY || !env.PUBLIC_BASE_URL || env.REPOST_PERMISSION_CONFIRMED !== 'true')) return json({ error: 'publishing_not_configured' },503);
       // Acknowledge only after all jobs are durable. Meta retries are INSERT OR IGNORE.
       const jobIds: string[] = [];
       for (const source of sources) jobIds.push(await enqueue(env, source));

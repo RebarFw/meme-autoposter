@@ -74,9 +74,25 @@ describe('webhook security', () => {
     expect((await call('/webhooks/instagram',{method:'POST', body:'{', headers:{'x-hub-signature-256':await sign('{')}})).status).toBe(400);
     expect((await call('/webhooks/instagram',{method:'POST', body:'x'.repeat(256001)})).status).toBe(413);
   });
-  it('fails closed when sender configuration is absent', async () => {
+  it('acknowledges signed notifications but never publishes when the owner is not configured', async () => {
+    const fetcher = vi.spyOn(globalThis, 'fetch');
     const body = JSON.stringify(payload());
-    expect((await call('/webhooks/instagram',{method:'POST', body, headers:{'x-hub-signature-256':await sign(body)}}, {...configured(),OWNER_IG_SENDER_ID:undefined})).status).toBe(503);
+    const response = await call('/webhooks/instagram',{method:'POST', body, headers:{'x-hub-signature-256':await sign(body)}}, {...configured(),OWNER_IG_SENDER_ID:undefined});
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ received: true, publishingReady: false });
+    expect((await env.DB.prepare('SELECT COUNT(*) AS n FROM jobs').first<{ n: number }>())?.n).toBe(0);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('retries only approved Reels during a publishing configuration outage', async () => {
+    const fetcher = vi.spyOn(globalThis, 'fetch');
+    const bindings = { ...configured(), BUFFER_API_KEY: undefined };
+    for (const sender of ['111', 'stranger']) {
+      const body = JSON.stringify(payload(sender));
+      const response = await call('/webhooks/instagram', { method: 'POST', body, headers: { 'x-hub-signature-256': await sign(body) } }, bindings);
+      expect(response.status).toBe(sender === '111' ? 503 : 200);
+    }
+    expect((await env.DB.prepare('SELECT COUNT(*) AS n FROM jobs').first<{ n: number }>())?.n).toBe(0);
+    expect(fetcher).not.toHaveBeenCalled();
   });
   it('admin is protected and status never returns secrets', async () => {
     expect((await call('/admin/status')).status).toBe(401);

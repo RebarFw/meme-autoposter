@@ -30,6 +30,8 @@ flowchart LR
 
 The webhook commits jobs to D1 before acknowledging Meta. Work starts immediately with `waitUntil`. Cloudflare gives background HTTP work approximately 30 seconds; a minute cron recovers unfinished jobs through atomic leases. Short stages run consecutively when possible. Every Buffer create uses `mode: shareNow` and `schedulingType: automatic`. Buffer and the social networks still require time to ingest and process a video.
 
+Valid signed notifications that cannot trigger publishing, including dashboard samples and DMs before an owner is configured, receive HTTP 200 with zero jobs. An approved Reel received during a Buffer/configuration outage receives HTTP 503 so Meta can retry it after recovery. Missing or invalid signatures are always rejected.
+
 ## Install, test and deploy
 
 Use Node.js 24 and npm. Run commands from this project folder.
