@@ -19,6 +19,9 @@
     "owner:status": "node scripts/owner.mjs status",
     "owner:diagnose": "node scripts/owner.mjs diagnose",
     "owner:finish": "node scripts/owner.mjs finish",
+    "owner:import": "node scripts/owner.mjs import",
+    "poll": "node scripts/admin.mjs poll",
+    "polling:validate": "node scripts/admin.mjs polling:validate",
     "meta:diagnose": "node scripts/admin.mjs meta:diagnose",
     "meta:subscribe": "node scripts/admin.mjs meta:subscribe",
     "db:remote": "wrangler d1 migrations apply meme-autoposter-jobs --remote"

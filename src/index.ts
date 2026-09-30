@@ -2,8 +2,9 @@ import { BufferClient } from './buffer';
 import { enqueue, maintenance, processJob, saveSetting, settings } from './jobs';
 import { metaRequest, parseMessages } from './meta';
 import { diagnoseMeta } from './meta-diagnostics';
-import { acceptOwnerSetup, diagnoseOwnerSetup, finishOwnerSetup, ownerSetupStatus, startOwnerSetup } from './owner-setup';
+import { acceptOwnerSetup, diagnoseOwnerSetup, finishOwnerSetup, importOwnerSetup, ownerSetupStatus, startOwnerSetup } from './owner-setup';
 import { serveMedia } from './media';
+import { initializePolling, pollInstagram, pollingStatus, validatePolling } from './instagram-polling';
 import { privacyResponse } from './privacy';
 import { constantTimeEqual, limitedBytes, validSignature } from './security';
 import { AppError, errorCode, log, type Channel, type Env } from './types';
@@ -14,9 +15,12 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
   const auth = request.headers.get('authorization') ?? '';
   if (!env.ADMIN_TOKEN || !auth.startsWith('Bearer ') || !await constantTimeEqual(auth.slice(7), env.ADMIN_TOKEN)) return json({ error: 'unauthorized' }, 401);
   if (path === '/admin/owner/start' && request.method === 'POST') return json(await startOwnerSetup(env));
+  if (path === '/admin/owner/import' && request.method === 'POST') return json(await importOwnerSetup(env, JSON.parse(new TextDecoder().decode(await limitedBytes(request.body, 2048)))));
   if (path === '/admin/owner/status' && request.method === 'GET') return json(await ownerSetupStatus(env));
   if (path === '/admin/owner/diagnose' && request.method === 'GET') return json(await diagnoseOwnerSetup(env));
   if (path === '/admin/owner/finish' && request.method === 'POST') { await finishOwnerSetup(env); return json({ installed: true }); }
+  if (path === '/admin/poll' && request.method === 'POST') { await pollInstagram(env); return json(await pollingStatus(env)); }
+  if (path === '/admin/poll/validate' && request.method === 'GET') return json(await validatePolling(env));
   if (path === '/admin/meta/diagnose' && request.method === 'GET') return json(await diagnoseMeta(env));
   if (path === '/admin/meta/subscribe' && request.method === 'POST') return json(await diagnoseMeta(env, true));
   if (path === '/admin/setup' && request.method === 'POST') {
@@ -41,7 +45,7 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
   if (path === '/admin/status' && request.method === 'GET') {
     const jobs = await env.DB.prepare('SELECT id,state,error_code,created_at,updated_at FROM jobs ORDER BY created_at DESC LIMIT 20').all();
     const deliveryRows = await env.DB.prepare('SELECT job_id,service,state,post_id,post_status,error_code FROM deliveries WHERE job_id IN (SELECT id FROM jobs ORDER BY created_at DESC LIMIT 20)').all();
-    return json({ configured: { buffer: !!env.BUFFER_API_KEY, metaSecret: !!env.META_APP_SECRET, metaAccess: !!env.META_ACCESS_TOKEN, owner: !!env.OWNER_IG_SENDER_ID, channels: !!await settings<Channel[]>(env,'channels') }, jobs: jobs.results, deliveries: deliveryRows.results });
+    return json({ configured: { buffer: !!env.BUFFER_API_KEY, metaSecret: !!env.META_APP_SECRET, metaAccess: !!env.META_ACCESS_TOKEN, owner: !!env.OWNER_IG_SENDER_ID, channels: !!await settings<Channel[]>(env,'channels') }, polling: await pollingStatus(env), jobs: jobs.results, deliveries: deliveryRows.results });
   }
   return json({ error: 'not_found' }, 404);
 }
@@ -73,6 +77,7 @@ export default {
       let payload: unknown;
       try { payload = JSON.parse(new TextDecoder().decode(body)); } catch { return json({ error: 'invalid_json' },400); }
       if (await acceptOwnerSetup(env, payload)) return json({ received: true, ownerSetup: true });
+      if (env.INGEST_MODE === 'polling') return json({ received: true, ingestMode: 'polling' });
       // Until an owner is explicitly installed, no inbound event is authorized
       // to publish. Acknowledge synthetic tests and irrelevant notifications;
       // making Meta retry these cannot improve setup and creates a retry storm.
@@ -85,7 +90,7 @@ export default {
       if (sources.length && (!env.BUFFER_API_KEY || !env.PUBLIC_BASE_URL || env.REPOST_PERMISSION_CONFIRMED !== 'true')) return json({ error: 'publishing_not_configured' },503);
       // Acknowledge only after all jobs are durable. Meta retries are INSERT OR IGNORE.
       const jobIds: string[] = [];
-      for (const source of sources) jobIds.push(await enqueue(env, source));
+      for (const source of sources) jobIds.push(await enqueue(env, { ...source, recipientId: recipients[0]! }));
       if (jobIds.length) ctx.waitUntil((async () => {
         for (const jobId of [...new Set(jobIds)]) await processJob(env, jobId);
       })().catch(error => log('background_failed', { code: errorCode(error) })));
@@ -97,6 +102,6 @@ export default {
     }
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(maintenance(env).catch(error => log('maintenance_failed', { code: errorCode(error) })));
+    ctx.waitUntil((async () => { await initializePolling(env); await pollInstagram(env); await maintenance(env); })().catch(error => log('maintenance_failed', { code: errorCode(error) })));
   },
 } satisfies ExportedHandler<Env>;

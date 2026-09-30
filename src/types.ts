@@ -10,6 +10,7 @@ export interface Env {
   DOWNLOADER_API_KEY?: string;
   DOWNLOADER_API_URL?: string;
   DOWNLOADER_MEDIA_HOSTS?: string;
+  INGEST_MODE?: 'webhook' | 'polling';
   PUBLIC_BASE_URL?: string;
   META_API_VERSION: string;
   MAX_VIDEO_BYTES: string;

@@ -1,21 +1,23 @@
 # Meme Autoposter
 
-Share an authorized Instagram Reel to your meme page by DM. A Cloudflare Worker accepts only your approved personal Instagram sender, downloads the MP4, and creates immediate posts on your existing Instagram and TikTok Buffer channels.
+Share an authorized Instagram Reel to your meme page by DM. A Cloudflare Worker checks the approved conversation through Meta's API every minute, downloads the MP4, and creates immediate posts on your existing Instagram and TikTok Buffer channels. The app remains unpublished. Signed webhook ingestion is also implemented for a future authorized mode change.
 
 ## Current status
 
-Deployed Worker: [meme-autoposter.meme-autoposter.workers.dev](https://meme-autoposter.meme-autoposter.workers.dev/health). Meta callback: `https://meme-autoposter.meme-autoposter.workers.dev/webhooks/instagram`. Remote health, Meta GET verification and protected admin access were verified on 2026-09-30. Local checks run lint, typechecking and Workers-runtime tests; GitHub Actions repeats the checks.
+Deployed Worker: [meme-autoposter.meme-autoposter.workers.dev](https://meme-autoposter.meme-autoposter.workers.dev/health). Meta callback: `https://meme-autoposter.meme-autoposter.workers.dev/webhooks/instagram`. Remote health, Meta GET verification and protected admin access were verified on 2026-10-01. Local checks run lint, typechecking and Workers-runtime tests; GitHub Actions repeats the checks.
 
 Public privacy policy: [Meme Autoposter Privacy Policy](https://meme-autoposter.meme-autoposter.workers.dev/privacy). Use this URL in Meta's Privacy Policy URL field. The page describes the app's current data processing, retention, service providers and how to contact the account owner about deletion.
 
-The complete Worker, D1 migration, downloader interface, deployment tooling and automated tests are implemented. Real account posting requires the Worker secrets, Buffer channel discovery, Meta account subscription and a real authorized Reel test. A successful automated test or deployment does **not** prove that Meta can deliver a particular third-party Reel's video. Keep the Meta app in development mode during owned-account diagnostics. Check the actual subscription API response before deciding whether an access level or mode change is necessary; the project never publishes your Meta app or submits App Review.
+The Worker, D1 migration, downloader interface, deployment tooling and automated tests are implemented. On 2026-10-01 the operator authorized API polling to preserve the DM workflow while keeping the app unpublished. Real account posting requires the Worker secrets, Buffer channel discovery, approved sender installation and a real authorized Reel test. A successful automated test or deployment does **not** prove that Meta exposes a particular third-party Reel's downloadable video. The project never publishes your Meta app or submits App Review.
+
+Polling is deployed and active. Meta's API matched the existing setup DM from `@rebarfw` to the configured meme account; its sender ID was securely installed as a Worker secret and the temporary proof removed. Actual owner-filtered conversation/message reads accepted the expanded share fields. The first scan was healthy and created zero jobs from old history. The remaining acceptance step is a new authorized Reel DM and confirmation of both actual publications and cleanup.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  A[Owner shares Reel by Instagram DM] --> B[Meta signed webhook]
-  B --> C[Worker: signature, sender and recipient checks]
+  A[Owner shares Reel by Instagram DM] --> B[Minute cron: Meta Conversations API]
+  B --> C[Worker: exact sender and recipient checks]
   C --> D[D1: message tombstone and durable job]
   D --> E[VideoDownloader providers]
   E --> F[Private R2 MP4]
@@ -28,7 +30,9 @@ flowchart LR
   D --> L[Minute cron: recovery and expiry cleanup]
 ```
 
-The webhook commits jobs to D1 before acknowledging Meta. Work starts immediately with `waitUntil`. Cloudflare gives background HTTP work approximately 30 seconds; a minute cron recovers unfinished jobs through atomic leases. Short stages run consecutively when possible. Every Buffer create uses `mode: shareNow` and `schedulingType: automatic`. Buffer and the social networks still require time to ingest and process a video.
+With `INGEST_MODE=polling`, the minute cron requests conversations filtered by the exact approved Instagram-scoped sender ID, checks recent message IDs, and reads only unseen message details. It checks the sender and own recipient again before committing a job to D1. History before polling activation is excluded. Quiet polling uses two small Meta GETs per minute for the approved conversation, with up to six unseen detail reads per run; API errors trigger backoff. Atomic leases prevent concurrent polling and recover unfinished jobs. Every Buffer create uses `mode: shareNow` and `schedulingType: automatic`. Buffer and the social networks still require time to ingest and process a video.
+
+With `INGEST_MODE=webhook`, the webhook commits jobs before acknowledging Meta and starts work immediately with `waitUntil`; the minute cron recovers interrupted work. Only one ingestion path is active. In polling mode, signed webhook samples are acknowledged without creating jobs. Switching ingestion mode does not reset permanent message tombstones.
 
 Valid signed notifications that cannot trigger publishing, including dashboard samples and DMs before an owner is configured, receive HTTP 200 with zero jobs. An approved Reel received during a Buffer/configuration outage receives HTTP 503 so Meta can retry it after recovery. Missing or invalid signatures are always rejected.
 
@@ -59,7 +63,7 @@ Get-Content -Raw .secrets/meta-verify-token | Set-Clipboard
 
 In your Meta app's **Manage messaging & content on Instagram** use case, open the Instagram Webhooks configuration. Set the callback URL, paste that verify token, and verify/save. Select the Instagram `messages` field. Keep the app in **Development**. Add/authorize your owned Instagram accounts as testers where required. Select Instagram API with Instagram Login: this project uses `graph.instagram.com` and an Instagram User access token, not a Facebook Page token.
 
-**Current delivery limitation:** on 2026-09-30 the actual Instagram Login dashboard explicitly displayed “To receive webhooks, your app must be in published state.” Profile reads, Conversations API reads and account subscriptions succeeded while the app was unpublished; a real setup DM was readable through Meta's API but did not arrive at the Worker. Dashboard synthetic webhook tests do reach the Worker. Keep the app unpublished as requested: successful API authorization or tester enrollment does not establish live DM delivery. Publishing the app or replacing webhook ingestion with API polling requires an explicit decision; neither is performed automatically.
+**Current delivery limitation:** on 2026-09-30 the actual Instagram Login dashboard explicitly required a published app to receive webhooks. Profile reads, Conversations API reads and account subscriptions succeeded while the app was unpublished; a real setup DM was readable through Meta's API but did not arrive at the Worker. On 2026-10-01 the dashboard's signed synthetic test passed HMAC validation and returned HTTP 200. The operator then explicitly authorized minute API polling. `INGEST_MODE=polling` uses the authorized Conversations API; it does not publish the app, submit App Review or change the account subscription.
 
 Then securely enter the secrets:
 
@@ -71,11 +75,13 @@ npm run setup
 npm run owner:start
 ```
 
-Send the exact one-time message printed by `owner:start` **from your approved personal Instagram account** to the indicated meme page. It expires after 15 minutes. Then run `npm run owner:finish`: the authenticated installer reads the sender ID verified by Meta's signature, uploads it as `OWNER_IG_SENDER_ID` through Wrangler standard input, and removes the temporary setup proof. The setup DM creates no publishing job. `npm run owner:status` checks delivery without printing the sender ID. A new `owner:start` invalidates the previous message; an already configured owner cannot be rebound through this flow.
+Send the exact one-time message printed by `owner:start` **from your approved personal Instagram account** to the indicated meme page. In polling mode, run `npm run owner:import -- PERSONAL_USERNAME SETUP_DM_CODE` with that personal username and exact printed message. The authenticated importer checks Meta's API for the exact message, username and own recipient, then establishes a 15-minute setup proof. It can recover an already sent setup message from the past 48 hours; this does not extend the public webhook challenge's lifetime. In webhook mode, the signed incoming setup DM establishes the proof while the challenge is valid.
+
+Then run `npm run owner:finish`: the authenticated installer reads the verified Instagram-scoped sender ID, uploads it as `OWNER_IG_SENDER_ID` through Wrangler standard input, and removes the temporary proof. It creates no new local secret file. The setup DM creates no publishing job. `npm run owner:status` checks the proof without printing the sender ID. A new `owner:start` invalidates the previous message; an already configured owner cannot be rebound through this flow. API verification proves an authenticated API read, not webhook delivery.
 
 If no verified setup DM arrives, `npm run owner:diagnose` checks the pending code through Meta's documented Conversations/message reads. It returns only match/recipient/format booleans and counts, discards message contents and sender IDs, and never installs an owner. This distinguishes API-visible messages from actual signed webhook delivery.
 
-`META_ACCESS_TOKEN` should be the meme account's Instagram User access token with `instagram_business_basic` and `instagram_business_manage_messages`. Use the Instagram app secret associated with that token's app. The sender ID is the **Instagram-scoped sender ID in the actual inbound messaging webhook**, not a username, Buffer channel ID, or an arbitrary profile ID. It is checked as an exact match. The setup flow discovers it from your authorization DM; you do not need to find it manually. Do not paste any API credential into chat or commit it.
+`META_ACCESS_TOKEN` should be the meme account's Instagram User access token with `instagram_business_basic` and `instagram_business_manage_messages`. Use the Instagram app secret associated with that token's app. The sender ID is the **Instagram-scoped sender ID from the actual authorization DM**, not a username, Buffer channel ID, or an arbitrary profile ID. It is checked as an exact match. The setup flow discovers it from Meta's authenticated message API or signed webhook; you do not need to find it manually. Do not paste any API credential into chat or commit it.
 
 If Ctrl+V in Wrangler's masked prompt stores a control character instead of pasting, copy the token and use PowerShell standard input: `Get-Clipboard -Raw | npx wrangler secret put META_ACCESS_TOKEN`. The command does not display the token. Never print clipboard contents or put a token directly in a shell command.
 
@@ -98,7 +104,7 @@ The `VideoDownloader` interface in `src/downloaders.ts` isolates video acquisiti
 
 Current Meta payloads may use `ig_post` for a shared post, with a media ID, title and signed CDN URL. A thumbnail or ambiguous share is **not** assumed to be a Reel. Graph metadata or the optional provider must identify it as a Reel. Legacy `share` payloads and dual attachments are also handled without duplicate jobs. A bare uploaded `video` or a story never triggers posting.
 
-Meta does not guarantee downloadable video for arbitrary third-party shares, even with the author's permission. Public pages can block automated requests, and Graph permissions limit access to other accounts' media. If the real webhook contains only a thumbnail and an inaccessible ID, a provider or an actual Reel permalink will be required. The job records `no_downloader_could_resolve_reel` and publishes nothing. This must be checked using a real authorized Reel before declaring the DM workflow live.
+Meta does not guarantee downloadable video for arbitrary third-party shares, even with the author's permission. Public pages can block automated requests, and Graph permissions limit access to other accounts' media. If the real message contains only a thumbnail and an inaccessible ID, a provider or an actual Reel permalink will be required. The job records `no_downloader_could_resolve_reel` and publishes nothing. This must be checked using a real authorized Reel before declaring the DM workflow live.
 
 To configure the optional API, put a **non-secret HTTPS endpoint** in `DOWNLOADER_API_URL`, and, if required, run:
 
@@ -136,15 +142,17 @@ Optional DM confirmation is off by default. Set `ENABLE_OWNER_DM=true` and redep
 
 ```powershell
 npm run status
+npm run polling:validate
+npm run poll
 npx wrangler tail
 npm run db:local
 npm run dev
 ```
 
-`GET /health` is public. `GET` and `POST /webhooks/instagram` perform verification and ingest signed DMs. `/media/<job-hash>.mp4` is capability protected. `POST /admin/setup`, `GET /admin/status`, `GET /admin/meta/diagnose`, `POST /admin/meta/subscribe`, and the `/admin/owner/start`, `/admin/owner/status`, `/admin/owner/diagnose`, `/admin/owner/finish` operations require `ADMIN_TOKEN`. The local admin CLI reads its ignored token automatically. Status returns fixed error codes and post IDs, never source URLs or secrets. The one-time setup stores only a hash of its code, expires after 15 minutes, and records a sender only after signature validation. Structured logs likewise contain hashes, provider names, fixed codes and post IDs only; request invocation logging is disabled to avoid logging temporary URL tokens.
+`GET /health` is public. `GET` and `POST /webhooks/instagram` perform verification and authenticate signed DMs. `/media/<job-hash>.mp4` is capability protected. All `/admin/*` operations require `ADMIN_TOKEN`, including setup/status, Meta diagnostics/subscription, sender setup/import/finish, manual `POST /admin/poll`, and read-only `GET /admin/poll/validate`. The local admin CLI reads its ignored token automatically. `polling:validate` checks actual owner-filtered conversation access and message/share fields without publishing. `poll` runs the normal owner-only ingestion when due. Status returns fixed error codes and post IDs, never source URLs or secrets. Setup stores only a code hash and establishes a 15-minute proof through a validated signature or an authenticated administrator's exact API match. Structured logs likewise contain hashes, provider names, fixed codes and post IDs only; request invocation logging is disabled to avoid logging temporary URL tokens.
 
 `npm run check` runs ESLint, TypeScript and Vitest inside the actual Workers runtime with local D1/R2. Tests mock Meta/Buffer HTTP responses; they never post to your real channels. GitHub Actions repeats checks and the Wrangler bundle dry run. See `docs/testing.md` for live acceptance checks and `docs/api-contracts.md` for official API references.
 
 ## Cost
 
-The design uses Workers Free, one D1 database and the existing R2 bucket, with no paid queue, browser rendering, AI API or video-transcoding service. At approximately one short video per day, normal requests/storage fit the published free allowances. A minute cron performs a small indexed D1 scan; R2 orphan listing is hourly, not every minute. Buffer's Free personal API currently allows 250 calls per 24 hours and 3,000 per rolling 30 days; normal usage is a few calls per meme. Free quotas are shared across your account and can change; existing subscriptions or an optional downloader may have their own costs. The deploy script never upgrades a plan.
+The design uses Workers Free, one D1 database and the existing R2 bucket, with no paid queue, browser rendering, AI API or video-transcoding service. At approximately one short video per day, normal requests/storage fit the published free allowances. A minute cron checks Meta's approved conversation and performs a small indexed D1 scan; R2 orphan listing is hourly, not every minute. Meta polling is separate from Buffer requests. Buffer's Free personal API currently allows 250 calls per 24 hours and 3,000 per rolling 30 days; normal usage is a few calls per meme. Free quotas are shared across your account and can change; existing subscriptions or an optional downloader may have their own costs. API errors back off and the deploy script never upgrades a plan.

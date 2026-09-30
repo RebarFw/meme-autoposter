@@ -1,18 +1,24 @@
 import { readFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
+import { createHash } from 'node:crypto';
 import { wrangler } from './wrangler.mjs';
 
 try {
   const config = JSON.parse(readFileSync('wrangler.jsonc', 'utf8'));
   const admin = readFileSync('.secrets/admin-token', 'utf8').trim();
-  async function request(action, method) {
-    const response = await fetch(`${config.vars.PUBLIC_BASE_URL}/admin/owner/${action}`, { method, redirect: 'error', signal: AbortSignal.timeout(30000), headers: { Authorization: `Bearer ${admin}` } });
+  async function request(action, method, body) {
+    const response = await fetch(`${config.vars.PUBLIC_BASE_URL}/admin/owner/${action}`, { method, redirect: 'error', signal: AbortSignal.timeout(60000), headers: { Authorization: `Bearer ${admin}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'owner_setup_failed');
     return result;
   }
   const command = process.argv[2];
-  if (command === 'start') {
+  if (command === 'import') {
+    const username = (process.argv[3] ?? '').replace(/^@/, '');
+    const challenge = process.argv[4] ?? '';
+    if (!/^[A-Za-z0-9._]{1,30}$/.test(username) || !/^meme-setup:[a-f0-9]{64}$/.test(challenge)) throw new Error('Use npm run owner:import -- PERSONAL_USERNAME SETUP_DM_CODE.');
+    console.log(JSON.stringify(await request('import', 'POST', { username, challengeHash: createHash('sha256').update(challenge).digest('hex') }), null, 2));
+  } else if (command === 'start') {
     const result = await request('start', 'POST');
     console.log(JSON.stringify({ sendFrom: 'Your approved personal Instagram account', sendTo: '@' + result.username, message: result.message, expiresAt: new Date(result.expiresAt).toISOString() }, null, 2));
   } else if (command === 'diagnose') {
@@ -31,5 +37,5 @@ try {
       catch (error) { if (attempt >= 3) throw error; await delay(1500); }
     }
     console.log('Verified personal sender securely installed as OWNER_IG_SENDER_ID; temporary setup proof removed.');
-  } else throw new Error('Use npm run owner:start, owner:status, owner:diagnose or owner:finish.');
+  } else throw new Error('Use npm run owner:start, owner:status, owner:diagnose, owner:import or owner:finish.');
 } catch (error) { console.error(error.message); process.exitCode = 1; }

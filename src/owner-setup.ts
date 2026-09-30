@@ -2,6 +2,8 @@ import { metaRequest } from './meta';
 import { saveSetting, settings } from './jobs';
 import { constantTimeEqual, sha256 } from './security';
 import { AppError, log, type Env } from './types';
+import { apiConversations, apiId, apiMessage, apiMessageList, apiObject, apiItems, apiTimestamp } from './instagram-api';
+import { initializePolling } from './instagram-polling';
 
 interface OwnerSetup {
   hash: string;
@@ -10,6 +12,7 @@ interface OwnerSetup {
   recipients: string[];
   senderId: string | null;
   matchedAt: number | null;
+  verifiedBy?: 'webhook' | 'api';
 }
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {};
@@ -70,7 +73,48 @@ export async function acceptOwnerSetup(env: Env, payload: unknown): Promise<bool
 export async function ownerSetupStatus(env: Env) {
   const pending = await settings<OwnerSetup>(env, 'owner_setup');
   if (!pending || pending.expiresAt <= Date.now()) return { matched: false, expired: true };
-  return { matched: !!pending.senderId, expired: false, senderId: pending.senderId ?? undefined, matchedAt: pending.matchedAt ?? undefined, expiresAt: pending.expiresAt };
+  return { matched: !!pending.senderId, expired: false, senderId: pending.senderId ?? undefined, matchedAt: pending.matchedAt ?? undefined, expiresAt: pending.expiresAt, verifiedBy: pending.verifiedBy ?? 'webhook' };
+}
+
+// Administrative recovery after switching to polling. The authenticated operator
+// explicitly selects a personal username and the hash of a setup DM they sent.
+// Only Meta's authenticated API supplies the sender ID. Public webhook requests
+// cannot call this path, and it never changes an already installed owner.
+export async function importOwnerSetup(env: Env, input: unknown) {
+  if (env.OWNER_IG_SENDER_ID) throw new AppError('owner_already_configured');
+  if (env.INGEST_MODE !== 'polling') throw new AppError('owner_api_import_requires_polling');
+  const { username, challengeHash } = apiObject(input);
+  if (typeof username !== 'string' || !/^[A-Za-z0-9._]{1,30}$/.test(username) || typeof challengeHash !== 'string' || !/^[a-f0-9]{64}$/.test(challengeHash)) throw new AppError('invalid_owner_api_selection');
+  const profile = await metaRequest<ObjectValue>(env, 'me?fields=id,user_id,username');
+  const me = Array.isArray(profile.data) ? apiObject(profile.data[0]) : profile;
+  const recipients = [...new Set([identifier(me.user_id), identifier(me.id)].filter((id): id is string => !!id))];
+  if (!recipients.length) throw new AppError('invalid_instagram_account');
+  let inspected = 0;
+  for (const conversation of await apiConversations(env)) {
+    for (const entry of await apiMessageList(env, apiId(conversation.id)!)) {
+      const timestamp = apiTimestamp(entry.created_time);
+      if (!Number.isFinite(timestamp) || timestamp < Date.now() - 48 * 3600_000 || timestamp > Date.now() + 300_000) continue;
+      if (++inspected > 20) throw new AppError('owner_api_proof_not_found');
+      const message = await apiMessage(env, apiId(entry.id)!);
+      const sender = apiObject(message.from);
+      const senderId = identifier(sender.id);
+      const text = typeof message.message === 'string' ? message.message.trim() : '';
+      if (!senderId || recipients.includes(senderId) || typeof sender.username !== 'string' || sender.username.toLowerCase() !== username.toLowerCase()) continue;
+      if (!/^meme-setup:[a-f0-9]{64}$/.test(text) || !await constantTimeEqual(await sha256(text), challengeHash)) continue;
+      if (!apiItems(message.to).some(recipient => recipients.includes(identifier(recipient.id) ?? ''))) continue;
+      const now = Date.now();
+      const proof: OwnerSetup = { hash: challengeHash, createdAt: now, expiresAt: now + 15 * 60_000, recipients, senderId, matchedAt: now, verifiedBy: 'api' };
+      const saved = await env.DB.prepare(`INSERT INTO settings(key,value) VALUES ('owner_setup',?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+        WHERE json_extract(settings.value,'$.senderId') IS NULL OR json_extract(settings.value,'$.expiresAt')<=?`)
+        .bind(JSON.stringify(proof), now).run();
+      if (!saved.meta.changes) throw new AppError('owner_setup_already_matched');
+      await initializePolling(env);
+      log('owner_setup_verified_via_api');
+      return { matched: true, verifiedBy: 'api', username };
+    }
+  }
+  throw new AppError('owner_api_proof_not_found');
 }
 
 // Read only: establish whether Meta exposes the pending authorization DM without
