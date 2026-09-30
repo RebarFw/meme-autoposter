@@ -6,6 +6,8 @@ Share an authorized Instagram Reel to your meme page by DM. A Cloudflare Worker 
 
 Deployed Worker: [meme-autoposter.meme-autoposter.workers.dev](https://meme-autoposter.meme-autoposter.workers.dev/health). Meta callback: `https://meme-autoposter.meme-autoposter.workers.dev/webhooks/instagram`. Remote health, Meta GET verification and protected admin access were verified on 2026-09-30. All 25 local tests and the GitHub checks passed.
 
+Public privacy policy: [Meme Autoposter Privacy Policy](https://meme-autoposter.meme-autoposter.workers.dev/privacy). Use this URL in Meta's Privacy Policy URL field. The page describes the app's current data processing, retention, service providers and how to contact the account owner about deletion.
+
 The complete Worker, D1 migration, downloader interface, deployment tooling and automated tests are implemented. Real account posting requires the Worker secrets, Buffer channel discovery, Meta account subscription and a real authorized Reel test. A successful automated test or deployment does **not** prove that Meta can deliver a particular third-party Reel's video. Keep the Meta app in development mode; no App Review or app publication is needed for this stage.
 
 ## Architecture

@@ -2,6 +2,7 @@ import { BufferClient } from './buffer';
 import { enqueue, maintenance, processJob, saveSetting, settings } from './jobs';
 import { metaRequest, parseMessages } from './meta';
 import { serveMedia } from './media';
+import { privacyResponse } from './privacy';
 import { constantTimeEqual, limitedBytes, validSignature } from './security';
 import { AppError, errorCode, log, type Channel, type Env } from './types';
 
@@ -41,6 +42,7 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const path = new URL(request.url).pathname;
     try {
+      if (path === '/privacy' || path === '/privacy/') return privacyResponse(request.method);
       if (path === '/health' && ['GET','HEAD'].includes(request.method)) return json({ ok: true, service: 'meme-autoposter' });
       if (path.startsWith('/admin/')) return await admin(request, env, path);
       const media = /^\/media\/([a-f0-9]{64})\.mp4$/.exec(path);
