@@ -14,6 +14,8 @@
     "verify:deployment": "node scripts/verify-deployment.mjs",
     "setup": "node scripts/admin.mjs setup",
     "status": "node scripts/admin.mjs status",
+    "meta:diagnose": "node scripts/admin.mjs meta:diagnose",
+    "meta:subscribe": "node scripts/admin.mjs meta:subscribe",
     "db:remote": "wrangler d1 migrations apply meme-autoposter-jobs --remote"
   },
   "devDependencies": {

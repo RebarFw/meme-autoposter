@@ -77,7 +77,7 @@ export class ApiVideoDownloader implements VideoDownloader {
     if (/^\d|:/.test(endpoint.hostname) || !endpoint.hostname.includes('.') || endpoint.hostname.endsWith('.local')) throw new AppError('downloader_invalid_host');
     let response: Response;
     try { response = await fetch(endpoint.toString(), {
-      method: 'POST', redirect: 'error', signal: AbortSignal.timeout(20_000),
+      method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(20_000),
       headers: { 'Content-Type': 'application/json', ...(env.DOWNLOADER_API_KEY ? { Authorization: `Bearer ${env.DOWNLOADER_API_KEY}` } : {}) },
       body: JSON.stringify({ url: source.reelUrl, mediaId: source.mediaId, attachmentUrl: source.attachmentUrl }),
     }); } catch { throw new AppError('downloader_api_network_error', true); }

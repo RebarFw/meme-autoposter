@@ -5,6 +5,15 @@ type RecordValue = Record<string, unknown>;
 const record = (value: unknown): RecordValue => value && typeof value === 'object' && !Array.isArray(value) ? value as RecordValue : {};
 const id = (value: unknown): string | undefined => typeof value === 'string' && /^[\x21-\x7e]{1,512}$/.test(value) ? value : undefined;
 
+export function metaAccessToken(env: Env): string {
+  if (!env.META_ACCESS_TOKEN) throw new AppError('missing_meta_access_token');
+  let token = env.META_ACCESS_TOKEN.trim();
+  // Wrangler may receive a token copied with matching enclosing quotes.
+  if ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"))) token = token.slice(1, -1).trim();
+  if (!/^[A-Za-z0-9_-]+$/.test(token)) throw new AppError('invalid_meta_access_token_format');
+  return token;
+}
+
 export function parseMessages(payload: unknown, owner: string, recipients: string[], now = Date.now()): ReelSource[] {
   const root = record(payload);
   if (root.object !== 'instagram' || !Array.isArray(root.entry)) return [];
@@ -64,13 +73,13 @@ export function parseMessages(payload: unknown, owner: string, recipients: strin
 }
 
 export async function metaRequest<T>(env: Env, path: string, init: RequestInit = {}): Promise<T> {
-  if (!env.META_ACCESS_TOKEN) throw new AppError('missing_meta_access_token');
+  const token = metaAccessToken(env);
   if (!/^v\d+\.0$/.test(env.META_API_VERSION)) throw new AppError('invalid_meta_version');
   let response: Response;
   try {
     response = await fetch(`https://graph.instagram.com/${env.META_API_VERSION}/${path}`, {
-      ...init, redirect: 'error', signal: AbortSignal.timeout(15_000),
-      headers: { 'Authorization': `Bearer ${env.META_ACCESS_TOKEN}`, 'Content-Type': 'application/json', ...init.headers },
+      ...init, redirect: 'manual', signal: AbortSignal.timeout(15_000),
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', ...init.headers },
     });
   } catch { throw new AppError('meta_network_error', true); }
   if (!response.ok) { await response.body?.cancel(); throw new AppError(`meta_http_${response.status}`, response.status === 429 || response.status >= 500); }

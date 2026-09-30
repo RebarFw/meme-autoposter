@@ -18,7 +18,7 @@ export class BufferClient {
     let response: Response;
     try {
       response = await fetch('https://api.buffer.com', {
-        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(20_000),
+        method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(20_000),
         headers: { Authorization: `Bearer ${this.env.BUFFER_API_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ query, variables }),
       });

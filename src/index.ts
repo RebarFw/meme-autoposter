@@ -1,6 +1,7 @@
 import { BufferClient } from './buffer';
 import { enqueue, maintenance, processJob, saveSetting, settings } from './jobs';
 import { metaRequest, parseMessages } from './meta';
+import { diagnoseMeta } from './meta-diagnostics';
 import { serveMedia } from './media';
 import { privacyResponse } from './privacy';
 import { constantTimeEqual, limitedBytes, validSignature } from './security';
@@ -11,6 +12,8 @@ const json = (value: unknown, status = 200) => Response.json(value, { status, he
 async function admin(request: Request, env: Env, path: string): Promise<Response> {
   const auth = request.headers.get('authorization') ?? '';
   if (!env.ADMIN_TOKEN || !auth.startsWith('Bearer ') || !await constantTimeEqual(auth.slice(7), env.ADMIN_TOKEN)) return json({ error: 'unauthorized' }, 401);
+  if (path === '/admin/meta/diagnose' && request.method === 'GET') return json(await diagnoseMeta(env));
+  if (path === '/admin/meta/subscribe' && request.method === 'POST') return json(await diagnoseMeta(env, true));
   if (path === '/admin/setup' && request.method === 'POST') {
     const channels = await new BufferClient(env).discoverChannels();
     let recipients = [channels[0].serviceId];

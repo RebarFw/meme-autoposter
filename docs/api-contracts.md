@@ -21,6 +21,11 @@ Checked against official documentation on 2026-09-30. Meta's documentation was a
 - [IG Media](https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-media): `media_type`, `media_product_type`, `media_url`, `permalink`; media URL is optional and may be withheld. Require Reel/video evidence.
 - [Graph changelog](https://developers.facebook.com/docs/graph-api/changelog): current version v26.0 released July 29, 2026. Version is configurable in `META_API_VERSION`.
 - Webhook setup distinguishes app field selection from account-level `POST /<INSTAGRAM_ACCOUNT_ID>/subscribed_apps`. `npm run setup` performs the account subscription once a valid Meta token is installed.
+- `npm run meta:diagnose` and `npm run meta:subscribe` run protected diagnostics without a Buffer key. The permission-list edge is a probe: an unsupported response means unknown permissions. Account subscription success proves that request was accepted, not production access or actual notification delivery. The messaging guide describes Standard Access for owned/managed/test accounts; the webhook setup guide lists Live/Advanced requirements for app-user notification access. Do not equate either generic documentation statement with the cause of a particular dashboard error without the actual API response.
+
+## Workers request behavior
+
+- [Cloudflare Request](https://developers.cloudflare.com/workers/runtime-apis/request/): Workers supports `redirect: 'manual'` and `'follow'`. Authenticated provider requests use `manual`, reject non-2xx responses and never forward credentials to redirect destinations. A live diagnostic exposed that `redirect: 'error'` throws before making a request in the deployed runtime.
 
 ## Cloudflare
 
