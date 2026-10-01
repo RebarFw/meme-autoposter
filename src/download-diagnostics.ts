@@ -1,22 +1,53 @@
 import { limitedBytes, META_MEDIA_HOSTS, reelUrl, secureUrl } from './security';
 import { AppError, errorCode, type Env, type ReelSource } from './types';
-import { configuredThirdPartyProviders, PUBLIC_PAGE_HEADERS } from './downloaders';
+import { ApifyVideoDownloader, configuredThirdPartyProviders, PUBLIC_PAGE_HEADERS } from './downloaders';
 import { SiteResponseError } from './downloader-providers/shared';
 
 export async function probeThirdPartyDownload(env: Env, name: string) {
   const provider = configuredThirdPartyProviders(env).find(p => p.name === name);
   if (!provider) throw new AppError('unknown_third_party_provider');
-  const row = await env.DB.prepare('SELECT source_json FROM jobs WHERE source_json IS NOT NULL ORDER BY created_at DESC LIMIT 1').first<{ source_json: string }>();
-  if (!row) throw new AppError('job_source_missing');
-  const source: ReelSource = JSON.parse(row.source_json);
-  const recipients = await env.DB.prepare("SELECT value FROM settings WHERE key='recipient_ids'").first<{ value: string }>();
-  if (!env.OWNER_IG_SENDER_ID || source.senderId !== env.OWNER_IG_SENDER_ID || !recipients || !JSON.parse(recipients.value).includes(source.recipientId) || !Number.isFinite(source.timestamp) || Date.now() - source.timestamp > 48 * 3600_000 || source.timestamp > Date.now() + 300_000 || !provider.supports(source, env)) throw new AppError('download_probe_not_safe');
+  const source = await authorizedProbeSource(env);
+  if (!provider.supports(source, env)) throw new AppError('download_probe_not_safe');
   try {
     const video = await provider.download(source, env);
     const length = Number(video.response.headers.get('content-length'));
     await video.response.body?.cancel();
     return { provider: name, resolved: true, contentType: 'video/mp4', bytes: length, mp4SignatureVerified: true };
   } catch (error) { return { provider: name, resolved: false, code: errorCode(error), ...(error instanceof SiteResponseError ? { facts: error.facts } : {}) }; }
+}
+
+async function authorizedProbeSource(env: Env): Promise<ReelSource> {
+  const row = await env.DB.prepare('SELECT source_json FROM jobs WHERE source_json IS NOT NULL ORDER BY created_at DESC LIMIT 1').first<{ source_json: string }>();
+  if (!row) throw new AppError('job_source_missing');
+  const source: ReelSource = JSON.parse(row.source_json);
+  const recipients = await env.DB.prepare("SELECT value FROM settings WHERE key='recipient_ids'").first<{ value: string }>();
+  if (!env.OWNER_IG_SENDER_ID || source.kind !== 'reel' || source.senderId !== env.OWNER_IG_SENDER_ID || !recipients || !JSON.parse(recipients.value).includes(source.recipientId) || !Number.isFinite(source.timestamp) || Date.now() - source.timestamp > 48 * 3600_000 || source.timestamp > Date.now() + 300_000) throw new AppError('download_probe_not_safe');
+  return source;
+}
+
+// Explicit operator test of the optional API. Uses the existing per-run/monthly
+// credit ceilings; never changes jobs, writes R2, or calls Buffer. Drain the
+// validated MP4 to prove the entire Worker transfer, rather than just its URL.
+export async function probeApifyDownload(env: Env) {
+  const source = await authorizedProbeSource(env);
+  const provider = new ApifyVideoDownloader();
+  if (!provider.supports(source, env)) throw new AppError('apify_not_configured');
+  try {
+    const video = await provider.download(source, env);
+    const length = Number(video.response.headers.get('content-length'));
+    const reader = video.response.body!.getReader();
+    let bytes = 0;
+    try {
+      while (true) {
+        const next = await reader.read();
+        if (next.done) break;
+        bytes += next.value.length;
+        if (bytes > length) throw new AppError('video_length_mismatch');
+      }
+      if (bytes !== length) throw new AppError('video_length_mismatch');
+    } catch (error) { await reader.cancel().catch(() => {}); throw error; }
+    return { provider: provider.name, resolved: true, contentType: 'video/mp4', bytes, mp4SignatureVerified: true, fullDownloadVerified: true };
+  } catch (error) { return { provider: provider.name, resolved: false, code: errorCode(error) }; }
 }
 
 function urlFacts(raw: string) {

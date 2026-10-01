@@ -22,6 +22,8 @@ When a website resolves a Reel locally but rejects Worker egress, `npm run recov
 
 The optional Apify provider consumes shared Free-plan credits. `settings.apify_usage` tracks at most 40 attempted runs per UTC calendar month; reservations occur before external calls and are not refunded on errors. Every run is capped at $0.05, one requested Reel, with paid add-ons disabled. A missing key makes this provider inactive; exhausted credits or budget fail closed. No paid subscription is enabled by the app.
 
+After securely installing a downloader token, `npm run download:probe-apify` performs an explicit full-transfer test through the Worker using the latest stored authorized, recent Reel. It consumes one of the same limited downloader runs. The test does not enqueue, retry, upload to R2 or publish; its output contains fixed validation facts only. It can safely verify a new key using an already completed job without duplicating that post.
+
 ## Cleanup and bucket lifecycle
 
 The Worker deletes media promptly after both `sent` statuses, or after known failures no longer need it. Hard link expiry is 24 hours by default, capped at 48 hours. Minute cron cleanup and an hourly orphan sweep delete objects. Only the `meme-autoposter/` prefix is owned by this app.

@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseApiMessage } from '../src/instagram-api';
+import { probeApifyDownload } from '../src/download-diagnostics';
 import { pollInstagram, pollingStatus } from '../src/instagram-polling';
 import { importOwnerSetup } from '../src/owner-setup';
 import { enqueue, processJob, refreshPosts, retryDownload, saveSetting, settings } from '../src/jobs';
@@ -221,7 +222,7 @@ describe('authenticated API owner identification', () => {
   });
   it('protects owner import and polling controls with admin authorization', async () => {
     const fetcher = vi.spyOn(globalThis, 'fetch');
-    for (const [path, method] of [['owner/import', 'POST'], ['poll', 'POST'], ['poll/validate', 'GET'], ['download/diagnose', 'GET'], ['jobs/retry-download', 'POST'], ['jobs/refresh-posts', 'POST']]) {
+    for (const [path, method] of [['owner/import', 'POST'], ['poll', 'POST'], ['poll/validate', 'GET'], ['download/diagnose', 'GET'], ['download/probe-apify', 'POST'], ['jobs/retry-download', 'POST'], ['jobs/refresh-posts', 'POST']]) {
       const ctx = createExecutionContext();
       const response = await worker.fetch(new Request('https://worker.example/admin/' + path, { method }), bindings(), ctx);
       expect(response.status).toBe(401);
@@ -231,6 +232,28 @@ describe('authenticated API owner identification', () => {
 });
 
 describe('safe pre-publication download recovery', () => {
+  it('tests a full Apify download of an existing completed Reel without touching job, posts or R2', async () => {
+    const source = parseApiMessage(message({ id: 'probe-existing-completed', shares: { data: [{ link: 'https://www.instagram.com/reel/ABCdef123/' }] } }), '111', ['222', '444'], 0)[0]!;
+    const id = await enqueue(bindings(), source);
+    await env.DB.prepare("UPDATE jobs SET state='completed' WHERE id=?").bind(id).run();
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      if (String(input).includes('api.apify.com')) return Response.json([{ shortCode: 'ABCdef123', type: 'Video', productType: 'clips', videoUrl: 'https://lookaside.fbsbx.com/reel.mp4' }]);
+      if (String(input).includes('fbsbx.com')) return new Response(mp4, { headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(mp4.length) } });
+      throw new Error('Unexpected API');
+    });
+    const configured: Env = { ...bindings(), DOWNLOADER_PROVIDER: 'apify', DOWNLOADER_API_KEY: 'fake-apify-api-key' };
+    expect(await probeApifyDownload(configured)).toMatchObject({ resolved: true, bytes: mp4.length, fullDownloadVerified: true });
+    expect(await env.DB.prepare('SELECT state FROM jobs WHERE id=?').bind(id).first('state')).toBe('completed');
+    expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM deliveries').first('n')).toBe(0);
+    expect(await env.MEDIA.head(`meme-autoposter/${id}.mp4`)).toBeNull();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await expect(probeApifyDownload({ ...configured, OWNER_IG_SENDER_ID: '999' })).rejects.toThrow('download_probe_not_safe');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    fetcher.mockImplementation(async input => String(input).includes('api.apify.com')
+      ? Response.json([{ shortCode: 'ABCdef123', type: 'Video', productType: 'clips', videoUrl: 'https://lookaside.fbsbx.com/reel.mp4' }])
+      : new Response(mp4.subarray(0, 12), { headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(mp4.length) } }));
+    expect(await probeApifyDownload(configured)).toMatchObject({ resolved: false, code: 'video_length_mismatch' });
+  });
   it('reuses the original job and prevents retries after any Buffer reservation', async () => {
     const api = mockApi();
     const source = parseApiMessage(message(), '111', ['222', '444'], 0)[0]!;

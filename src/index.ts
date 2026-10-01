@@ -1,5 +1,5 @@
 import { BufferClient } from './buffer';
-import { diagnoseDownload, probeThirdPartyDownload } from './download-diagnostics';
+import { diagnoseDownload, probeApifyDownload, probeThirdPartyDownload } from './download-diagnostics';
 import { enqueue, maintenance, processJob, refreshPosts, retryDownload, saveSetting, settings } from './jobs';
 import { metaRequest, parseMessages } from './meta';
 import { diagnoseMeta } from './meta-diagnostics';
@@ -45,6 +45,7 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
     const body = JSON.parse(new TextDecoder().decode(await limitedBytes(request.body, 512)));
     return json(await probeThirdPartyDownload(env, typeof body?.provider === 'string' ? body.provider : ''));
   }
+  if (path === '/admin/download/probe-apify' && request.method === 'POST') return json(await probeApifyDownload(env));
   if (path === '/admin/meta/diagnose' && request.method === 'GET') return json(await diagnoseMeta(env));
   if (path === '/admin/meta/subscribe' && request.method === 'POST') return json(await diagnoseMeta(env, true));
   if (path === '/admin/setup' && request.method === 'POST') {
