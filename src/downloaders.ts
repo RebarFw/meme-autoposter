@@ -6,6 +6,7 @@ import { VideoDropperDownloader } from './downloader-providers/videodropper';
 import { FastDlDownloader } from './downloader-providers/fastdl';
 import { SaveFromDownloader } from './downloader-providers/savefrom';
 import { SnapInstaDownloader } from './downloader-providers/snapinsta';
+import { APIFY_RUN_MAX_USD, reserveApifyRun } from './apify-budget';
 export type { DownloadedVideo, VideoDownloader } from './video-downloader';
 
 // Anonymous public-page metadata requests need a supported web client header;
@@ -97,16 +98,8 @@ export class ApifyVideoDownloader implements VideoDownloader {
     if (!url || env.DOWNLOADER_PROVIDER !== 'apify' || !env.DOWNLOADER_API_KEY) throw new AppError('apify_not_configured');
     const token = env.DOWNLOADER_API_KEY.trim();
     if (!/^[A-Za-z0-9_-]{10,256}$/.test(token)) throw new AppError('invalid_downloader_key_format');
-    // Reserve before the external request. Atomic monthly and per-run ceilings
-    // bound consumption of free credits, including failed/retried downloads.
-    const month = new Date().toISOString().slice(0, 7);
-    const reserved = await env.DB.prepare(`INSERT INTO settings(key,value) VALUES ('apify_usage',?)
-      ON CONFLICT(key) DO UPDATE SET value=json_set(settings.value,'$.month',?,'$.runs',
-        CASE WHEN json_extract(settings.value,'$.month')=? THEN COALESCE(json_extract(settings.value,'$.runs'),0)+1 ELSE 1 END)
-      WHERE json_extract(settings.value,'$.month')<>? OR COALESCE(json_extract(settings.value,'$.runs'),0)<40
-      RETURNING value`).bind(JSON.stringify({ month, runs: 1 }), month, month, month).first();
-    if (!reserved) throw new AppError('downloader_monthly_budget_exhausted');
-    const query = new URLSearchParams({ timeout: '60', maxTotalChargeUsd: '0.05', maxItems: '1', limit: '1', clean: 'true', fields: 'shortCode,type,productType,videoUrl' });
+    await reserveApifyRun(env, signal);
+    const query = new URLSearchParams({ timeout: '60', maxTotalChargeUsd: String(APIFY_RUN_MAX_USD), maxItems: '1', limit: '1', clean: 'true', fields: 'shortCode,type,productType,videoUrl' });
     let response: Response;
     try {
       response = await fetch('https://api.apify.com/v2/actors/apify~instagram-reel-scraper/run-sync-get-dataset-items?' + query, {

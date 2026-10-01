@@ -1,4 +1,5 @@
 import { BufferClient } from './buffer';
+import { apifyBudgetStatus } from './apify-budget';
 import { diagnoseDownload, probeApifyDownload, probeThirdPartyDownload } from './download-diagnostics';
 import { enqueue, maintenance, processJob, refreshPosts, retryDownload, saveSetting, settings } from './jobs';
 import { metaRequest, parseMessages } from './meta';
@@ -46,6 +47,8 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
     return json(await probeThirdPartyDownload(env, typeof body?.provider === 'string' ? body.provider : ''));
   }
   if (path === '/admin/download/probe-apify' && request.method === 'POST') return json(await probeApifyDownload(env));
+  if (path === '/admin/apify/budget' && request.method === 'GET') return json(await apifyBudgetStatus(env));
+  if (path === '/admin/apify/enforce-limit' && request.method === 'POST') return json(await apifyBudgetStatus(env, true));
   if (path === '/admin/meta/diagnose' && request.method === 'GET') return json(await diagnoseMeta(env));
   if (path === '/admin/meta/subscribe' && request.method === 'POST') return json(await diagnoseMeta(env, true));
   if (path === '/admin/setup' && request.method === 'POST') {

@@ -9,6 +9,7 @@ import { enqueue, processJob, refreshPosts, retryDownload, saveSetting, settings
 import { sha256 } from '../src/security';
 import worker from '../src/index';
 import type { Channel, Env } from '../src/types';
+import { apifyGuardResponse } from './apify-fixture';
 
 const bindings = (): Env => ({ ...env, INGEST_MODE: 'polling', META_ACCESS_TOKEN: 'fake-meta', BUFFER_API_KEY: 'fake-buffer' });
 const channels: Channel[] = [
@@ -44,7 +45,7 @@ function mockApi(items = [message()]) {
   return { fetcher, creates: () => creates };
 }
 beforeEach(async () => {
-  await env.DB.batch([env.DB.prepare('DELETE FROM deliveries'), env.DB.prepare('DELETE FROM jobs'), env.DB.prepare('DELETE FROM settings')]);
+  await env.DB.batch([env.DB.prepare('DELETE FROM deliveries'), env.DB.prepare('DELETE FROM jobs'), env.DB.prepare('DELETE FROM settings'), env.DB.prepare('DELETE FROM apify_budget')]);
   await saveSetting(env, 'channels', channels);
   await saveSetting(env, 'recipient_ids', ['222', '444']);
   await saveSetting(env, 'instagram_poll', { startedAt: Date.now() - 60_000, seen: [], versions: {} });
@@ -124,6 +125,7 @@ describe('durable owner-only polling', () => {
     const original = api.fetcher.getMockImplementation()!;
     api.fetcher.mockImplementation(async (input, init) => {
       if (String(input).includes('www.instagram.com/reel/')) return new Response('<html></html>');
+      const guard = apifyGuardResponse(input); if (guard) return guard;
       if (String(input).includes('api.apify.com')) return Response.json([{ shortCode: 'ABCdef123', type: 'Video', productType: 'clips', videoUrl: 'https://lookaside.fbsbx.com/reel.mp4' }]);
       return original(input, init);
     });
@@ -133,7 +135,7 @@ describe('durable owner-only polling', () => {
     await pollInstagram(configured);
     expect(api.creates()).toBe(2);
     expect(await countJobs()).toBe(1);
-    expect(api.fetcher.mock.calls.filter(([url]) => String(url).includes('api.apify.com'))).toHaveLength(1);
+    expect(api.fetcher.mock.calls.filter(([url]) => String(url).includes('api.apify.com/v2/actors/'))).toHaveLength(1);
   });
   it('publishes a native share through a free third-party fallback once even after repeated polling and job processing', async () => {
     const api = mockApi([message({ shares: { data: [{ link: 'https://www.instagram.com/reel/ABCdef123/' }] } })]);
@@ -222,7 +224,7 @@ describe('authenticated API owner identification', () => {
   });
   it('protects owner import and polling controls with admin authorization', async () => {
     const fetcher = vi.spyOn(globalThis, 'fetch');
-    for (const [path, method] of [['owner/import', 'POST'], ['poll', 'POST'], ['poll/validate', 'GET'], ['download/diagnose', 'GET'], ['download/probe-apify', 'POST'], ['jobs/retry-download', 'POST'], ['jobs/refresh-posts', 'POST']]) {
+    for (const [path, method] of [['owner/import', 'POST'], ['poll', 'POST'], ['poll/validate', 'GET'], ['download/diagnose', 'GET'], ['download/probe-apify', 'POST'], ['apify/budget', 'GET'], ['apify/enforce-limit', 'POST'], ['jobs/retry-download', 'POST'], ['jobs/refresh-posts', 'POST']]) {
       const ctx = createExecutionContext();
       const response = await worker.fetch(new Request('https://worker.example/admin/' + path, { method }), bindings(), ctx);
       expect(response.status).toBe(401);
@@ -237,6 +239,7 @@ describe('safe pre-publication download recovery', () => {
     const id = await enqueue(bindings(), source);
     await env.DB.prepare("UPDATE jobs SET state='completed' WHERE id=?").bind(id).run();
     const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const guard = apifyGuardResponse(input); if (guard) return guard;
       if (String(input).includes('api.apify.com')) return Response.json([{ shortCode: 'ABCdef123', type: 'Video', productType: 'clips', videoUrl: 'https://lookaside.fbsbx.com/reel.mp4' }]);
       if (String(input).includes('fbsbx.com')) return new Response(mp4, { headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(mp4.length) } });
       throw new Error('Unexpected API');
@@ -246,12 +249,12 @@ describe('safe pre-publication download recovery', () => {
     expect(await env.DB.prepare('SELECT state FROM jobs WHERE id=?').bind(id).first('state')).toBe('completed');
     expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM deliveries').first('n')).toBe(0);
     expect(await env.MEDIA.head(`meme-autoposter/${id}.mp4`)).toBeNull();
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(5);
     await expect(probeApifyDownload({ ...configured, OWNER_IG_SENDER_ID: '999' })).rejects.toThrow('download_probe_not_safe');
-    expect(fetcher).toHaveBeenCalledTimes(2);
-    fetcher.mockImplementation(async input => String(input).includes('api.apify.com')
+    expect(fetcher).toHaveBeenCalledTimes(5);
+    fetcher.mockImplementation(async input => apifyGuardResponse(input) ?? (String(input).includes('api.apify.com')
       ? Response.json([{ shortCode: 'ABCdef123', type: 'Video', productType: 'clips', videoUrl: 'https://lookaside.fbsbx.com/reel.mp4' }])
-      : new Response(mp4.subarray(0, 12), { headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(mp4.length) } }));
+      : new Response(mp4.subarray(0, 12), { headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(mp4.length) } })));
     expect(await probeApifyDownload(configured)).toMatchObject({ resolved: false, code: 'video_length_mismatch' });
   });
   it('reuses the original job and prevents retries after any Buffer reservation', async () => {

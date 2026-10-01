@@ -25,6 +25,8 @@
     "download:diagnose": "node scripts/admin.mjs download:diagnose",
     "download:probe": "node scripts/probe-download.mjs",
     "download:probe-apify": "node scripts/probe-apify.mjs",
+    "apify:budget": "node scripts/admin.mjs apify:budget",
+    "apify:enforce-limit": "node scripts/admin.mjs apify:enforce-limit",
     "retry:download": "node scripts/retry-download.mjs",
     "recover:download": "node scripts/recover-download.mjs",
     "posts:refresh": "node scripts/refresh-posts.mjs",

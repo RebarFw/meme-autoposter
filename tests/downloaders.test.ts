@@ -2,12 +2,14 @@ import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ApiVideoDownloader, ApifyVideoDownloader, MetaGraphDownloader, PublicPageDownloader, downloadVideo } from '../src/downloaders';
 import type { Env, ReelSource } from '../src/types';
+import { apifyBudgetStatus } from '../src/apify-budget';
+import { apifyGuardResponse } from './apify-fixture';
 
 const source: ReelSource = {messageId:'mid',senderId:'111',recipientId:'222',timestamp:Date.now(),kind:'shared-post',mediaId:'123'};
 const bindings = {...env,META_ACCESS_TOKEN:'fake-meta'} as Env;
 const video = () => new Response(new Uint8Array([0,0,0,24,102,116,121,112,105,115,111,109,0,0,0,0,105,115,111,109,109,112,52,50]), {headers:{'Content-Type':'video/mp4','Content-Length':'24'}});
 afterEach(()=>vi.restoreAllMocks());
-beforeEach(async () => { await env.DB.prepare("DELETE FROM settings WHERE key='apify_usage'").run(); });
+beforeEach(async () => { await env.DB.batch([env.DB.prepare("DELETE FROM settings WHERE key='apify_usage'"), env.DB.prepare('DELETE FROM apify_budget')]); });
 
 it('uses official Graph metadata for ambiguous current post shares and requires a Reel', async () => {
   const fetcher = vi.spyOn(globalThis,'fetch').mockImplementation(async input => String(input).includes('graph.instagram.com')
@@ -55,10 +57,11 @@ const apifyItem = { shortCode: 'ABCdef123', type: 'Video', productType: 'clips',
 
 it('uses the real Apify Actor contract, caps costs and keeps the key away from media URLs and requests', async () => {
   const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const guard = apifyGuardResponse(input); if (guard) return guard;
     const url = new URL(String(input));
     if (url.hostname === 'api.apify.com') {
       expect(url.pathname).toBe('/v2/actors/apify~instagram-reel-scraper/run-sync-get-dataset-items');
-      expect(url.searchParams.get('maxTotalChargeUsd')).toBe('0.05');
+      expect(url.searchParams.get('maxTotalChargeUsd')).toBe('0.0073');
       expect(url.searchParams.get('maxItems')).toBe('1');
       expect(url.searchParams.get('limit')).toBe('1');
       expect(url.searchParams.has('token')).toBe(false);
@@ -70,7 +73,7 @@ it('uses the real Apify Actor contract, caps costs and keeps the key away from m
     return video();
   });
   expect((await new ApifyVideoDownloader().download(apifySource, apifyBindings)).provider).toBe('apify-instagram-reel');
-  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(fetcher).toHaveBeenCalledTimes(5);
 });
 
 it('cannot use Apify without its optional key and selected provider', async () => {
@@ -87,28 +90,32 @@ it('cannot use Apify without its optional key and selected provider', async () =
 it('rejects wrong clips, images, feed videos and untrusted media from a downloader response', async () => {
   const fetcher = vi.spyOn(globalThis, 'fetch');
   for (const item of [{ ...apifyItem, shortCode: 'Other123' }, { ...apifyItem, type: 'Image' }, { ...apifyItem, productType: 'feed' }, { ...apifyItem, videoUrl: 'https://evil.example/a.mp4' }]) {
-    fetcher.mockResolvedValue(Response.json([item]));
+    fetcher.mockImplementation(async input => apifyGuardResponse(input) ?? Response.json([item]));
     await expect(new ApifyVideoDownloader().download(apifySource, apifyBindings)).rejects.toThrow();
   }
-  expect(fetcher).toHaveBeenCalledTimes(4);
+  expect(fetcher.mock.calls.filter(([input]) => String(input).includes('/actors/'))).toHaveLength(4);
 });
 
 it('enforces the monthly credit ceiling atomically under concurrent requests', async () => {
   let actorRuns = 0;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+    const guard = apifyGuardResponse(input); if (guard) return guard;
     if (String(input).includes('api.apify.com')) { actorRuns++; return Response.json([apifyItem]); }
     return video();
   });
-  const results = await Promise.allSettled(Array.from({ length: 45 }, () => new ApifyVideoDownloader().download(apifySource, apifyBindings)));
-  expect(actorRuns).toBe(40);
-  expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(40);
-  for (const result of results.filter(result => result.status === 'rejected')) expect(result.reason.code).toBe('downloader_monthly_budget_exhausted');
+  await apifyBudgetStatus(apifyBindings);
+  await env.DB.prepare('UPDATE apify_budget SET runs=495,reserved_microusd=3613500').run();
+  const results = await Promise.allSettled(Array.from({ length: 12 }, () => new ApifyVideoDownloader().download(apifySource, apifyBindings)));
+  expect(actorRuns).toBe(5);
+  expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(5);
+  for (const result of results.filter(result => result.status === 'rejected')) expect(result.reason.code).toBe('apify_monthly_run_limit');
+  expect(await env.DB.prepare('SELECT runs FROM apify_budget').first('runs')).toBe(500);
 });
 
 it('never forwards an API key to redirects and handles exhausted credits without retrying', async () => {
-  const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 302, headers: { location: 'https://evil.example/' } }));
+  const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => apifyGuardResponse(input) ?? new Response(null, { status: 302, headers: { location: 'https://evil.example/' } }));
   await expect(new ApifyVideoDownloader().download(apifySource, apifyBindings)).rejects.toMatchObject({ code: 'apify_http_302', retryable: false });
-  fetcher.mockResolvedValue(new Response(null, { status: 402 }));
+  fetcher.mockImplementation(async input => apifyGuardResponse(input) ?? new Response(null, { status: 402 }));
   await expect(new ApifyVideoDownloader().download(apifySource, apifyBindings)).rejects.toMatchObject({ code: 'apify_http_402', retryable: false });
-  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(fetcher.mock.calls.filter(([input]) => String(input).includes('/actors/'))).toHaveLength(2);
 });
