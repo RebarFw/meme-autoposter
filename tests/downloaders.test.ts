@@ -5,7 +5,7 @@ import type { Env, ReelSource } from '../src/types';
 
 const source: ReelSource = {messageId:'mid',senderId:'111',recipientId:'222',timestamp:Date.now(),kind:'shared-post',mediaId:'123'};
 const bindings = {...env,META_ACCESS_TOKEN:'fake-meta'} as Env;
-const video = () => new Response(new Uint8Array(12), {headers:{'Content-Type':'video/mp4','Content-Length':'12'}});
+const video = () => new Response(new Uint8Array([0,0,0,24,102,116,121,112,105,115,111,109,0,0,0,0,105,115,111,109,109,112,52,50]), {headers:{'Content-Type':'video/mp4','Content-Length':'24'}});
 afterEach(()=>vi.restoreAllMocks());
 beforeEach(async () => { await env.DB.prepare("DELETE FROM settings WHERE key='apify_usage'").run(); });
 

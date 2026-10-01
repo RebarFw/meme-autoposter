@@ -1,5 +1,5 @@
 import { BufferClient } from './buffer';
-import { diagnoseDownload } from './download-diagnostics';
+import { diagnoseDownload, probeThirdPartyDownload } from './download-diagnostics';
 import { enqueue, maintenance, processJob, retryDownload, saveSetting, settings } from './jobs';
 import { metaRequest, parseMessages } from './meta';
 import { diagnoseMeta } from './meta-diagnostics';
@@ -30,6 +30,10 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
   if (path === '/admin/download/diagnose' && request.method === 'GET') {
     const route = new URL(request.url).searchParams.get('route');
     return json(await diagnoseDownload(env, route === 'post' || route === 'embed' ? route : 'reel'));
+  }
+  if (path === '/admin/download/probe' && request.method === 'POST') {
+    const body = JSON.parse(new TextDecoder().decode(await limitedBytes(request.body, 512)));
+    return json(await probeThirdPartyDownload(env, typeof body?.provider === 'string' ? body.provider : ''));
   }
   if (path === '/admin/meta/diagnose' && request.method === 'GET') return json(await diagnoseMeta(env));
   if (path === '/admin/meta/subscribe' && request.method === 'POST') return json(await diagnoseMeta(env, true));

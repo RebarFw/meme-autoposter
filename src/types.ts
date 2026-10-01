@@ -11,6 +11,7 @@ export interface Env {
   DOWNLOADER_PROVIDER?: 'apify';
   DOWNLOADER_API_URL?: string;
   DOWNLOADER_MEDIA_HOSTS?: string;
+  THIRD_PARTY_DOWNLOADER_PROVIDERS?: string;
   INGEST_MODE?: 'webhook' | 'polling';
   PUBLIC_BASE_URL?: string;
   META_API_VERSION: string;

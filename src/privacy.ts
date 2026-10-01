@@ -42,7 +42,7 @@ const privacyPolicy = `<!doctype html>
     <li><strong>Meta / Instagram:</strong> provides authorized conversation and message reads, signed message events, media and optional message replies.</li>
     <li><strong>Cloudflare:</strong> hosts the app, stores job records, and temporarily stores videos in a private R2 bucket.</li>
     <li><strong>Buffer:</strong> receives the video through an expiring link, its caption and the selected channel information to publish to Instagram and TikTok.</li>
-    <li><strong>An optional downloader provider:</strong> if configured by the owner, receives the Reel URL or media information needed to obtain the video.</li>
+    <li><strong>Downloader providers:</strong> the owner has enabled VideoDropper, FastDL, SaveFrom and SnapInsta as sequential last-resort fallbacks. A provider receives only the canonical public Reel URL needed to obtain its video; Instagram, Buffer and administrator credentials, sender IDs and private message text are never sent to these sites. An optional API provider can also be configured by the owner.</li>
   </ul>
   <p>Published videos and captions are visible according to the Instagram and TikTok accounts' settings. These providers process information under their own policies, including <a href="https://www.facebook.com/privacy/policy/">Meta's Privacy Policy</a>, <a href="https://www.tiktok.com/legal/page/eea/privacy-policy/en">TikTok's Privacy Policy</a>, <a href="https://buffer.com/legal#privacy-policy">Buffer's Privacy Policy</a> and <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare's Privacy Policy</a>.</p>
 

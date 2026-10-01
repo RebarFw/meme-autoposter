@@ -10,7 +10,7 @@ Public privacy policy: [Meme Autoposter Privacy Policy](https://meme-autoposter.
 
 The Worker, D1 migration, downloader interface, deployment tooling and automated tests are implemented. On 2026-10-01 the operator authorized API polling to preserve the DM workflow while keeping the app unpublished. Real account posting requires the Worker secrets, Buffer channel discovery, approved sender installation and a real authorized Reel test. A successful automated test or deployment does **not** prove that Meta exposes a particular third-party Reel's downloadable video. The project never publishes your Meta app or submits App Review.
 
-Polling is deployed and active. Meta's API matched the existing setup DM from `@rebarfw` to the configured meme account; its sender ID was securely installed as a Worker secret and the temporary proof removed. The real native Reel test revealed a link-only `shares.data[].link` response. The parser now handles that response and recovered the same DM as one durable job. Anonymous public Reel/post/embed requests returned HTML without video data, so this job stopped before any Buffer submission and its temporary media metadata was cleaned. An optional Apify adapter is implemented and awaits a securely supplied key; real video acquisition, both publications and final cleanup are still unverified.
+Polling is deployed and active. Meta's API matched the existing setup DM from `@rebarfw` to the configured meme account; its sender ID was securely installed as a Worker secret and the temporary proof removed. The real native Reel test revealed a link-only `shares.data[].link` response. The parser handles that response and recovered the same DM as one durable job. Anonymous public Reel/post/embed requests returned HTML without video data. On 2026-10-01 the owner authorized multiple third-party website fallbacks; VideoDropper resolved that existing Reel to a direct Meta CDN MP4 URL without a key. Website adapters are isolated and tested separately. Current live publication results are recorded in `docs/testing.md`; a resolved URL alone does not prove Buffer publication.
 
 ## Architecture
 
@@ -102,6 +102,11 @@ The `VideoDownloader` interface in `src/downloaders.ts` isolates video acquisiti
 3. **Public page:** For an actual `/reel/` URL, try published `og:video` or embedded `video_url` data. Zero cost, best effort. Does not log into Instagram or bypass access controls. Can be disabled with `ALLOW_PUBLIC_PAGE_DOWNLOADER=false`.
 4. **Optional API:** An adapter for a downloader you choose later. No paid account is provisioned and no unsupported vendor endpoint is assumed.
 5. **Optional Apify:** `DOWNLOADER_PROVIDER=apify` selects Apify's maintained Instagram Reel Scraper once `DOWNLOADER_API_KEY` exists. It sends one canonical Reel URL, requests one result, verifies its exact shortcode, video and Reel type, then downloads only from trusted Meta CDN domains. The credential stays in the API authorization header. No transcript, paid share count or separately stored Apify video is requested. The adapter uses the actual documented Actor contract, separate from the generic API adapter above.
+6. **Third-party website fallbacks:** isolated classes in `src/downloader-providers/` implement VideoDropper, FastDL, SaveFrom and SnapInsta. They run sequentially after the providers above. `THIRD_PARTY_DOWNLOADER_PROVIDERS=videodropper,fastdl,savefrom,snapinsta` enables and orders them; remove a name to disable that site or set an empty string to disable all. Duplicate names run once, unknown names fail closed. No website is essential to the app. Only a canonical, authorized Reel permalink is sent, never account credentials, private messages or cookies.
+
+The adapters use the actual public website flows inspected on 2026-10-01, not advertised or invented stable API contracts. VideoDropper's site uses an encoded `url` header and returns original CDN video URLs. FastDL's anonymous unsigned fallback posts `target_url`; SaveFrom's worker receives its form fields and anonymous `{url}` fallback. Those two currently reject/challenge anonymous requests. SnapInsta currently requires Turnstile and is skipped; the adapter supports only its plain HTML result format if that becomes available. Each can be replaced independently. No remote result JavaScript is executed and no CAPTCHA is solved or bypassed. Changes to these unofficial formats can break a site even if its browser page still works.
+
+A website attempt has a 15-second deadline (VideoDropper: 25 seconds), including redirects and media fetches. The whole downloader chain/upload has a 150-second deadline, within the job's lease. Metadata is capped at 256 KB. Direct Meta CDN MP4s are preferred; only the provider's observed, narrowly allowlisted proxy may be tried afterward. HTML/CAPTCHA responses, thumbnail/audio links, unsafe hosts/redirects, missing or oversized lengths, compressed media and fake MP4 signatures are rejected **before selecting the provider**, allowing automatic failover. R2 still verifies the full streamed length and enforces the size limit.
 
 Instagram Login can return a native Reel with only `shares.data[].link`, omitting the generic Message reference's `url`, `id` and `type`. This was verified through the live API on 2026-10-01. A canonical `/reel/` link supplies Reel evidence; unrelated links, declared stories and ambiguous multiple shares remain rejected. Parser upgrades recheck recent cached message hashes while retaining permanent D1 job tombstones.
 
@@ -150,6 +155,7 @@ npm run status
 npm run polling:validate
 npm run poll
 npm run download:diagnose
+npm run download:probe
 npx wrangler tail
 npm run db:local
 npm run dev
@@ -160,6 +166,8 @@ npm run dev
 `npm run check` runs ESLint, TypeScript and Vitest inside the actual Workers runtime with local D1/R2. Tests mock Meta/Buffer HTTP responses; they never post to your real channels. GitHub Actions repeats checks and the Wrangler bundle dry run. See `docs/testing.md` for live acceptance checks and `docs/api-contracts.md` for official API references.
 
 `download:diagnose` inspects the latest job's anonymous public page without posting or returning source URLs/content. Add `-- post` or `-- embed` to check the equivalent public page route. After fixing downloader configuration, `npm run retry:download` queues the latest job's download again; an explicit job hash can be supplied with `-- JOB_HASH`. It retains the same job/tombstone and rejects stale/wrong-owner jobs, existing R2 media, active leases and **any** existing Buffer delivery reservation. A Buffer submission can never be reset through this command.
+
+`download:probe` checks each enabled website against the latest authorized, recent job and cancels the video after header/signature validation. It prints fixed result codes, MIME and byte count only, writes no R2 object and creates no Buffer post. Use `npm run download:probe -- videodropper` to inspect just one provider. Its `/admin/download/probe` route requires administrator authentication and cannot accept an arbitrary URL or invoke the paid optional API.
 
 ## Cost
 

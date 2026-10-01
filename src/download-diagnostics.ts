@@ -1,6 +1,22 @@
 import { limitedBytes, META_MEDIA_HOSTS, reelUrl, secureUrl } from './security';
-import { errorCode, type Env, type ReelSource } from './types';
-import { PUBLIC_PAGE_HEADERS } from './downloaders';
+import { AppError, errorCode, type Env, type ReelSource } from './types';
+import { configuredThirdPartyProviders, PUBLIC_PAGE_HEADERS } from './downloaders';
+
+export async function probeThirdPartyDownload(env: Env, name: string) {
+  const provider = configuredThirdPartyProviders(env).find(p => p.name === name);
+  if (!provider) throw new AppError('unknown_third_party_provider');
+  const row = await env.DB.prepare('SELECT source_json FROM jobs WHERE source_json IS NOT NULL ORDER BY created_at DESC LIMIT 1').first<{ source_json: string }>();
+  if (!row) throw new AppError('job_source_missing');
+  const source: ReelSource = JSON.parse(row.source_json);
+  const recipients = await env.DB.prepare("SELECT value FROM settings WHERE key='recipient_ids'").first<{ value: string }>();
+  if (!env.OWNER_IG_SENDER_ID || source.senderId !== env.OWNER_IG_SENDER_ID || !recipients || !JSON.parse(recipients.value).includes(source.recipientId) || !Number.isFinite(source.timestamp) || Date.now() - source.timestamp > 48 * 3600_000 || source.timestamp > Date.now() + 300_000 || !provider.supports(source, env)) throw new AppError('download_probe_not_safe');
+  try {
+    const video = await provider.download(source, env);
+    const length = Number(video.response.headers.get('content-length'));
+    await video.response.body?.cancel();
+    return { provider: name, resolved: true, contentType: 'video/mp4', bytes: length, mp4SignatureVerified: true };
+  } catch (error) { return { provider: name, resolved: false, code: errorCode(error) }; }
+}
 
 function urlFacts(raw: string) {
   try {

@@ -78,7 +78,7 @@ export async function metaRequest<T>(env: Env, path: string, init: RequestInit =
   let response: Response;
   try {
     response = await fetch(`https://graph.instagram.com/${env.META_API_VERSION}/${path}`, {
-      ...init, redirect: 'manual', signal: AbortSignal.timeout(15_000),
+      ...init, redirect: 'manual', signal: init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', ...init.headers },
     });
   } catch { throw new AppError('meta_network_error', true); }

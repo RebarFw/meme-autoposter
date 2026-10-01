@@ -23,6 +23,7 @@
     "poll": "node scripts/admin.mjs poll",
     "polling:validate": "node scripts/admin.mjs polling:validate",
     "download:diagnose": "node scripts/admin.mjs download:diagnose",
+    "download:probe": "node scripts/probe-download.mjs",
     "retry:download": "node scripts/retry-download.mjs",
     "meta:diagnose": "node scripts/admin.mjs meta:diagnose",
     "meta:subscribe": "node scripts/admin.mjs meta:subscribe",

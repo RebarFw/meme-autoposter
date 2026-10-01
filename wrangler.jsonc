@@ -38,6 +38,7 @@
     "MEDIA_TTL_SECONDS": "86400",
     "ENABLE_OWNER_DM": "false",
     "ALLOW_PUBLIC_PAGE_DOWNLOADER": "true",
+    "THIRD_PARTY_DOWNLOADER_PROVIDERS": "videodropper,fastdl,savefrom,snapinsta",
     "REPOST_PERMISSION_CONFIRMED": "true",
     "PUBLIC_BASE_URL": "https://meme-autoposter.meme-autoposter.workers.dev"
   }

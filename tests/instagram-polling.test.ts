@@ -133,6 +133,23 @@ describe('durable owner-only polling', () => {
     expect(await countJobs()).toBe(1);
     expect(api.fetcher.mock.calls.filter(([url]) => String(url).includes('api.apify.com'))).toHaveLength(1);
   });
+  it('publishes a native share through a free third-party fallback once even after repeated polling and job processing', async () => {
+    const api = mockApi([message({ shares: { data: [{ link: 'https://www.instagram.com/reel/ABCdef123/' }] } })]);
+    const original = api.fetcher.getMockImplementation()!;
+    api.fetcher.mockImplementation(async (input, init) => {
+      if (String(input).includes('www.instagram.com/reel/')) return new Response('<html></html>');
+      if (String(input).includes('api.videodropper.app')) return Response.json({ video: [{ video: 'https://lookaside.fbsbx.com/reel.mp4' }] });
+      return original(input, init);
+    });
+    const configured: Env = { ...bindings(), THIRD_PARTY_DOWNLOADER_PROVIDERS: 'videodropper,fastdl,savefrom,snapinsta' };
+    await pollInstagram(configured);
+    await due(); await pollInstagram(configured);
+    const id = await sha256('222:message-1');
+    await processJob(configured, id);
+    expect(api.creates()).toBe(2);
+    expect(await countJobs()).toBe(1);
+    expect(api.fetcher.mock.calls.filter(([url]) => String(url).includes('api.videodropper.app'))).toHaveLength(1);
+  });
   it('ignores stranger DMs even if Meta returns them in the owner-filtered conversation', async () => {
     const api = mockApi([message({ from: { id: '999', username: 'stranger' } })]);
     await pollInstagram(bindings());
