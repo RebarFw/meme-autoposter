@@ -37,6 +37,10 @@ Checked against official documentation on 2026-09-30. Meta's documentation was a
 - [Actor output](https://apify.com/apify/instagram-reel-scraper/output-schema): verify `shortCode`, `type: Video`, `productType: clips` and `videoUrl`; reject different content or untrusted media URLs. Output is filtered to these fields and limited to one item.
 - [Pricing](https://apify.com/pricing): Free includes $5 monthly credits, no card required; shared account usage can exhaust credits. The adapter reserves at most 40 runs per UTC month before API calls, sets `maxTotalChargeUsd=0.05`, disables add-ons, and never changes a subscription. A credential-free live request returned HTTP 402 requiring payment/authentication; no payment was sent and no Actor run was started. Contract tests do not establish real extraction until a Free account's key is installed.
 
+## Third-party website adapters
+
+See [the inspected website flows and limitations](website-downloaders.md). The adapters use actual public form/client formats, not a claim of supported stable vendor APIs. Live testing must run from Workers: VideoDropper returned a media URL locally but a challenge in the deployed environment. All current deployed site results and their confidence limits are recorded in [testing](testing.md). Website metadata may contain HTML or a strict JSON argument to a known callback; media itself must be MP4. Never execute a result script, copy anti-bot clearance or accept CAPTCHA/HTML as a video.
+
 ## Workers request behavior
 
 - [Cloudflare Request](https://developers.cloudflare.com/workers/runtime-apis/request/): Workers supports `redirect: 'manual'` and `'follow'`. Authenticated provider requests use `manual`, reject non-2xx responses and never forward credentials to redirect destinations. A live diagnostic exposed that `redirect: 'error'` throws before making a request in the deployed runtime.

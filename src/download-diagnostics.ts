@@ -1,6 +1,7 @@
 import { limitedBytes, META_MEDIA_HOSTS, reelUrl, secureUrl } from './security';
 import { AppError, errorCode, type Env, type ReelSource } from './types';
 import { configuredThirdPartyProviders, PUBLIC_PAGE_HEADERS } from './downloaders';
+import { SiteResponseError } from './downloader-providers/shared';
 
 export async function probeThirdPartyDownload(env: Env, name: string) {
   const provider = configuredThirdPartyProviders(env).find(p => p.name === name);
@@ -15,7 +16,7 @@ export async function probeThirdPartyDownload(env: Env, name: string) {
     const length = Number(video.response.headers.get('content-length'));
     await video.response.body?.cancel();
     return { provider: name, resolved: true, contentType: 'video/mp4', bytes: length, mp4SignatureVerified: true };
-  } catch (error) { return { provider: name, resolved: false, code: errorCode(error) }; }
+  } catch (error) { return { provider: name, resolved: false, code: errorCode(error), ...(error instanceof SiteResponseError ? { facts: error.facts } : {}) }; }
 }
 
 function urlFacts(raw: string) {

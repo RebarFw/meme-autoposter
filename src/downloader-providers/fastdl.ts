@@ -1,7 +1,7 @@
 import { META_MEDIA_HOSTS, reelUrl } from '../security';
 import { AppError, type Env, type ReelSource } from '../types';
 import { downloadSignal, type VideoDownloader } from '../video-downloader';
-import { candidates, enabled, record, requestedReel, siteJson, siteText } from './shared';
+import { candidates, enabled, record, requestedReel, SiteResponseError, siteJson, siteText } from './shared';
 
 export class FastDlDownloader implements VideoDownloader {
   readonly name = 'fastdl';
@@ -20,8 +20,9 @@ export class FastDlDownloader implements VideoDownloader {
     if (items.length !== 1) throw new AppError('fastdl_not_single_video');
     const item = record(items[0]);
     if (item.success === false) throw new AppError('fastdl_unavailable');
-    if ((typeof item.code === 'string' && item.code !== new URL(url).pathname.split('/')[2]) || (typeof item.source_url === 'string' && reelUrl(item.source_url) !== url)) throw new AppError('fastdl_wrong_reel');
-    if (!Array.isArray(item.video_versions)) throw new AppError('fastdl_no_video');
+    const facts = { resultKeys: Object.keys(item).filter(k => ['success','status','code','data','result','video_versions','meta','message','source_url','error'].includes(k)), hasVideoVersions: Array.isArray(item.video_versions), codeMatchesReel: item.code === new URL(url).pathname.split('/')[2], sourceMatchesReel: typeof item.source_url === 'string' && reelUrl(item.source_url) === url };
+    if (!Array.isArray(item.video_versions)) throw new SiteResponseError('fastdl_no_video', facts);
+    if ((typeof item.code === 'string' && !facts.codeMatchesReel) || (typeof item.source_url === 'string' && !facts.sourceMatchesReel)) throw new SiteResponseError('fastdl_wrong_reel', facts);
     const version = record(item.video_versions[0]);
     const urls = [version.url, version.url_downloadable].filter((v): v is string => typeof v === 'string');
     return candidates(urls, [...META_MEDIA_HOSTS, 'media.fastdl.app'], this.name, env, signal);

@@ -25,7 +25,7 @@ export class VideoDropperDownloader implements VideoDownloader {
   async download(source: ReelSource, env: Env, parent?: AbortSignal) {
     const signal = downloadSignal(parent, 25_000);
     const url = requestedReel(source);
-    const text = await siteText('https://api.videodropper.app/allinone', { headers: { url: await encodeVideoDropperUrl(url), Accept: 'application/json' } }, signal);
+    const text = await siteText('https://api.videodropper.app/allinone', { headers: { url: await encodeVideoDropperUrl(url), Accept: 'application/json', Origin: 'https://videodropper.app', Referer: 'https://videodropper.app/' } }, signal);
     const data = record(siteJson(text));
     if (!Array.isArray(data.video) || data.video.length !== 1) throw new AppError('videodropper_not_single_video');
     const item = record(data.video[0]);
