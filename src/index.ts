@@ -1,6 +1,6 @@
 import { BufferClient } from './buffer';
 import { diagnoseDownload, probeThirdPartyDownload } from './download-diagnostics';
-import { enqueue, maintenance, processJob, retryDownload, saveSetting, settings } from './jobs';
+import { enqueue, maintenance, processJob, refreshPosts, retryDownload, saveSetting, settings } from './jobs';
 import { metaRequest, parseMessages } from './meta';
 import { diagnoseMeta } from './meta-diagnostics';
 import { acceptOwnerSetup, diagnoseOwnerSetup, finishOwnerSetup, importOwnerSetup, ownerSetupStatus, startOwnerSetup } from './owner-setup';
@@ -23,9 +23,19 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
   if (path === '/admin/poll' && request.method === 'POST') { await pollInstagram(env); return json(await pollingStatus(env)); }
   if (path === '/admin/poll/validate' && request.method === 'GET') return json(await validatePolling(env));
   if (path === '/admin/jobs/retry-download' && request.method === 'POST') {
-    const body = JSON.parse(new TextDecoder().decode(await limitedBytes(request.body, 1024)));
-    await retryDownload(env, typeof body?.jobId === 'string' ? body.jobId : '');
+    const body = JSON.parse(new TextDecoder().decode(await limitedBytes(request.body, 8192)));
+    let resolved: { reelUrl: string; videoUrl: string } | undefined;
+    if (body?.resolved !== undefined) {
+      if (typeof body.resolved?.reelUrl !== 'string' || typeof body.resolved?.videoUrl !== 'string') throw new AppError('invalid_recovery_source');
+      resolved = { reelUrl: body.resolved.reelUrl, videoUrl: body.resolved.videoUrl };
+    }
+    await retryDownload(env, typeof body?.jobId === 'string' ? body.jobId : '', resolved);
     return json({ queued: true, jobId: body.jobId });
+  }
+  if (path === '/admin/jobs/refresh-posts' && request.method === 'POST') {
+    const body = JSON.parse(new TextDecoder().decode(await limitedBytes(request.body, 1024)));
+    await refreshPosts(env, typeof body?.jobId === 'string' ? body.jobId : '');
+    return json({ checked: true, jobId: body.jobId });
   }
   if (path === '/admin/download/diagnose' && request.method === 'GET') {
     const route = new URL(request.url).searchParams.get('route');

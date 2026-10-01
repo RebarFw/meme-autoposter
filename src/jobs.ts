@@ -3,7 +3,7 @@ import { createCaption } from './caption';
 import { downloadVideo } from './downloaders';
 import { notifyOwner } from './meta';
 import { storeVideo, temporaryMediaUrl } from './media';
-import { sha256 } from './security';
+import { META_MEDIA_HOSTS, reelUrl, secureUrl, sha256 } from './security';
 import { AppError, errorCode, log, type Channel, type Delivery, type Env, type Job, type ReelSource } from './types';
 
 export async function settings<T>(env: Env, key: string): Promise<T | null> {
@@ -24,22 +24,42 @@ export async function enqueue(env: Env, source: ReelSource): Promise<string> {
   return jobId;
 }
 
-export async function retryDownload(env: Env, id: string): Promise<void> {
+export async function retryDownload(env: Env, id: string, resolved?: { reelUrl: string; videoUrl: string }): Promise<void> {
   if (!/^[a-f0-9]{64}$/.test(id)) throw new AppError('invalid_job_id');
   const job = await env.DB.prepare('SELECT * FROM jobs WHERE id=?').bind(id).first<Job>();
   if (!job?.source_json || !env.OWNER_IG_SENDER_ID) throw new AppError('download_retry_not_safe');
   const source: ReelSource = JSON.parse(job.source_json);
   const recipients = await settings<string[]>(env, 'recipient_ids');
-  if (source.senderId !== env.OWNER_IG_SENDER_ID || !recipients?.includes(source.recipientId) || !Number.isFinite(source.timestamp) || source.timestamp < Date.now() - 48 * 3600_000) throw new AppError('download_retry_not_safe');
+  if (source.kind !== 'reel' || source.senderId !== env.OWNER_IG_SENDER_ID || !recipients?.includes(source.recipientId) || !Number.isFinite(source.timestamp) || source.timestamp < Date.now() - 48 * 3600_000 || source.timestamp > Date.now() + 300_000) throw new AppError('download_retry_not_safe');
+  let updatedSource = job.source_json;
+  if (resolved) {
+    const original = reelUrl(source.reelUrl);
+    if (!original || reelUrl(resolved.reelUrl) !== original) throw new AppError('recovery_reel_mismatch');
+    const videoUrl = secureUrl(resolved.videoUrl, META_MEDIA_HOSTS);
+    // This is an operator-provided resolution of the EXISTING authorized DM,
+    // never a new upload trigger. Normal downloader validation still applies.
+    updatedSource = JSON.stringify({ ...source, attachmentUrl: videoUrl.href });
+  }
   // Reuse the same permanent job. A Buffer reservation of ANY state makes
   // this operation unavailable; uncertain submissions must be reconciled.
   const now = Date.now();
-  const result = await env.DB.prepare(`UPDATE jobs SET state='pending',error_code=NULL,attempts=0,next_run_at=?,lease_token=NULL,lease_until=0,updated_at=?
+  const result = await env.DB.prepare(`UPDATE jobs SET source_json=?,state='pending',error_code=NULL,attempts=0,next_run_at=?,lease_token=NULL,lease_until=0,updated_at=?
     WHERE id=? AND state='attention' AND object_key IS NULL AND lease_until<=? AND source_json=?
     AND NOT EXISTS (SELECT 1 FROM deliveries WHERE job_id=?)`)
-    .bind(now, now, id, now, job.source_json, id).run();
+    .bind(updatedSource, now, now, id, now, job.source_json, id).run();
   if (!result.meta.changes) throw new AppError('download_retry_not_safe');
   log('download_retry_queued', { job: id });
+}
+
+export async function refreshPosts(env: Env, id: string): Promise<void> {
+  if (!/^[a-f0-9]{64}$/.test(id)) throw new AppError('invalid_job_id');
+  // Expedite only the read/reconciliation stage. Existing reservations and
+  // permanent job state prevent this control from ever creating another post.
+  const now = Date.now();
+  const result = await env.DB.prepare("UPDATE jobs SET next_run_at=? WHERE id=? AND state='waiting' AND lease_until<=?")
+    .bind(now, id, now).run();
+  if (!result.meta.changes) throw new AppError('post_refresh_not_available');
+  await processJob(env, id);
 }
 
 export async function claimJob(env: Env, id: string, now = Date.now()): Promise<Job | null> {
@@ -124,7 +144,7 @@ async function checkPosts(env: Env, job: Job): Promise<void> {
       .bind(post.status, failed ? 'failed' : 'accepted', failed ? 'buffer_publish_failed' : null, Date.now(), job.id, delivery.service).run();
   }
   const current = await deliveries(env, job.id);
-  if (current.length === 2 && current.every(d => d.post_status === 'sent')) {
+  if (current.length === 2 && current.every(d => d.state === 'accepted' && d.post_status === 'sent')) {
     await removeMedia(env, job);
     await updateJob(env, job, 'completed');
     log('job_completed', { job: job.id, bothPublished: true });

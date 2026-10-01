@@ -18,6 +18,8 @@ Buffer publication failures may require reconnecting the channel or correcting a
 
 After fixing a provider/key, use `npm run retry:download` (latest job) or `npm run retry:download -- JOB_HASH`. This queues the same job only if it belongs to the current exact owner/recipient, is within 48 hours, is in `attention`, has no R2 object or active lease, and has no delivery record of any state. It resets download attempts only; permanent message deduplication remains. Cron performs the retry. Never delete delivery reservations to make this command succeed.
 
+When a website resolves a Reel locally but rejects Worker egress, `npm run recover:download -- JOB_HASH` provides an optional operator recovery for the same pre-submission job. See `website-downloaders.md` for its exact constraints. It sends no account credentials to the resolver and keeps signed URLs in memory. It does not establish automatic future downloads or install a PC background process. `npm run posts:refresh -- JOB_HASH` performs only status reconciliation on an existing waiting job and can expedite checking a recovered older job; it cannot create posts.
+
 The optional Apify provider consumes shared Free-plan credits. `settings.apify_usage` tracks at most 40 attempted runs per UTC calendar month; reservations occur before external calls and are not refunded on errors. Every run is capped at $0.05, one requested Reel, with paid add-ons disabled. A missing key makes this provider inactive; exhausted credits or budget fail closed. No paid subscription is enabled by the app.
 
 ## Cleanup and bucket lifecycle

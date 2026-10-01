@@ -25,6 +25,8 @@
     "download:diagnose": "node scripts/admin.mjs download:diagnose",
     "download:probe": "node scripts/probe-download.mjs",
     "retry:download": "node scripts/retry-download.mjs",
+    "recover:download": "node scripts/recover-download.mjs",
+    "posts:refresh": "node scripts/refresh-posts.mjs",
     "meta:diagnose": "node scripts/admin.mjs meta:diagnose",
     "meta:subscribe": "node scripts/admin.mjs meta:subscribe",
     "db:remote": "wrangler d1 migrations apply meme-autoposter-jobs --remote"

@@ -16,3 +16,11 @@ All providers receive only the canonical public permalink. Private/restricted co
 The downloader verifies exact `video/mp4`, a bounded declared length, no content encoding, and `ftyp` bytes before accepting a response. It replays the inspected bytes through a stream rather than buffering the entire file. R2 verifies the complete streamed length; a truncated or oversized transfer cannot become a post. MP4 container detection does not replace Buffer's codec/aspect-ratio/duration checks.
 
 Provider probes use a protected endpoint and the stored authorized job. They cancel after MP4 prefix verification and perform no posting or storage. The existing job can be retried only before any Buffer reservation exists; tombstones and per-channel reservations are retained.
+
+## Operator recovery when Worker egress is blocked
+
+`npm run recover:download -- JOB_HASH` optionally resolves the existing authorized Reel through VideoDropper from the operator's computer. It needs the existing Cloudflare CLI login and ignored administrator token. D1 source data and the resulting signed CDN URL remain in memory; neither is printed or saved. The resolver receives only the canonical public permalink, with no account credentials or private DM text.
+
+The authenticated Worker checks the exact original Reel, installed sender, owned recipient, message age, trusted HTTPS CDN host and absence of **any** Buffer reservation. A conditional D1 update resumes the original job; concurrent recovery attempts cannot both succeed. The Worker then performs the actual bounded MP4 download, private R2 upload and normal immediate publishing. HTML/CAPTCHA and malformed files still fail validation. Recovery never creates a new job or removes its permanent tombstone.
+
+This is an explicit local operator tool, not a background PC requirement or proof that future native Share DMs can always download entirely within the Worker. A working Worker-compatible provider is still needed for that fully autonomous workflow. `npm run posts:refresh -- JOB_HASH` expedites only Buffer status reads for an existing waiting job; it cannot submit another post.

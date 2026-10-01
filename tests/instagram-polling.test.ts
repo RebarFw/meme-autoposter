@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseApiMessage } from '../src/instagram-api';
 import { pollInstagram, pollingStatus } from '../src/instagram-polling';
 import { importOwnerSetup } from '../src/owner-setup';
-import { enqueue, processJob, retryDownload, saveSetting, settings } from '../src/jobs';
+import { enqueue, processJob, refreshPosts, retryDownload, saveSetting, settings } from '../src/jobs';
 import { sha256 } from '../src/security';
 import worker from '../src/index';
 import type { Channel, Env } from '../src/types';
@@ -34,6 +34,7 @@ function mockApi(items = [message()]) {
     if (url.includes('fbsbx.com')) return new Response(mp4, { headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(mp4.length) } });
     if (url === 'https://api.buffer.com') {
       const body = JSON.parse(String(init?.body));
+      if (!body.query.includes('mutation')) return Response.json({ data: { post: { id: body.variables.input.id, status: 'sent', schedulingType: 'automatic' } } });
       expect(body.variables.input.mode).toBe('shareNow');
       return Response.json({ data: { createPost: { __typename: 'PostActionSuccess', post: { id: 'post-' + ++creates, status: 'sending', schedulingType: 'automatic' } } } });
     }
@@ -220,7 +221,7 @@ describe('authenticated API owner identification', () => {
   });
   it('protects owner import and polling controls with admin authorization', async () => {
     const fetcher = vi.spyOn(globalThis, 'fetch');
-    for (const [path, method] of [['owner/import', 'POST'], ['poll', 'POST'], ['poll/validate', 'GET'], ['download/diagnose', 'GET'], ['jobs/retry-download', 'POST']]) {
+    for (const [path, method] of [['owner/import', 'POST'], ['poll', 'POST'], ['poll/validate', 'GET'], ['download/diagnose', 'GET'], ['jobs/retry-download', 'POST'], ['jobs/refresh-posts', 'POST']]) {
       const ctx = createExecutionContext();
       const response = await worker.fetch(new Request('https://worker.example/admin/' + path, { method }), bindings(), ctx);
       expect(response.status).toBe(401);
@@ -245,11 +246,60 @@ describe('safe pre-publication download recovery', () => {
   });
   it('rejects stale jobs and jobs belonging to a different sender', async () => {
     const source = parseApiMessage(message(), '111', ['222', '444'], 0)[0]!;
-    for (const override of [{ senderId: '999' }, { timestamp: Date.now() - 49 * 3600_000 }]) {
+    for (const override of [{ senderId: '999' }, { timestamp: Date.now() - 49 * 3600_000 }, { timestamp: Date.now() + 3600_000 }]) {
       const id = await enqueue(bindings(), { ...source, ...override, messageId: crypto.randomUUID() });
       await env.DB.prepare("UPDATE jobs SET state='attention' WHERE id=?").bind(id).run();
       await expect(retryDownload(bindings(), id)).rejects.toThrow('download_retry_not_safe');
     }
     expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM deliveries').first('n')).toBe(0);
+  });
+  it('recovers a resolved native Reel once, confirms both sent posts and deletes private media', async () => {
+    const api = mockApi();
+    const source = parseApiMessage(message({ shares: { data: [{ link: 'https://www.instagram.com/reel/ABCdef123/' }] } }), '111', ['222', '444'], 0)[0]!;
+    const id = await enqueue(bindings(), source);
+    await env.DB.prepare("UPDATE jobs SET state='attention' WHERE id=?").bind(id).run();
+    const resolved = { reelUrl: source.reelUrl!, videoUrl: 'https://lookaside.fbsbx.com/reel.mp4' };
+    const attempts = await Promise.allSettled([retryDownload(bindings(), id, resolved), retryDownload(bindings(), id, resolved)]);
+    expect(attempts.filter(a => a.status === 'fulfilled')).toHaveLength(1);
+    await processJob(bindings(), id);
+    expect(api.creates()).toBe(2);
+    expect(await env.MEDIA.head(`meme-autoposter/${id}.mp4`)).not.toBeNull();
+    await refreshPosts(bindings(), id);
+    expect(await env.DB.prepare('SELECT state FROM jobs WHERE id=?').bind(id).first('state')).toBe('completed');
+    expect(await env.MEDIA.head(`meme-autoposter/${id}.mp4`)).toBeNull();
+    await expect(refreshPosts(bindings(), id)).rejects.toThrow('post_refresh_not_available');
+    await expect(retryDownload(bindings(), id, resolved)).rejects.toThrow('download_retry_not_safe');
+    await enqueue(bindings(), source); await processJob(bindings(), id);
+    expect(api.creates()).toBe(2);
+    expect(await countJobs()).toBe(1);
+  });
+  it('rejects mismatched Reels and unsafe recovery URLs without changing the stored DM or fetching', async () => {
+    const api = mockApi();
+    const source = parseApiMessage(message({ shares: { data: [{ link: 'https://www.instagram.com/reel/ABCdef123/' }] } }), '111', ['222', '444'], 0)[0]!;
+    const id = await enqueue(bindings(), source);
+    await env.DB.prepare("UPDATE jobs SET state='attention' WHERE id=?").bind(id).run();
+    await expect(retryDownload(bindings(), id, { reelUrl: 'https://www.instagram.com/reel/Different/', videoUrl: 'https://lookaside.fbsbx.com/reel.mp4' })).rejects.toThrow('recovery_reel_mismatch');
+    for (const videoUrl of ['http://lookaside.fbsbx.com/video.mp4', 'https://cdninstagram.com.evil.example/video.mp4', 'https://token@lookaside.fbsbx.com/video.mp4', 'https://127.0.0.1/video.mp4']) {
+      await expect(retryDownload(bindings(), id, { reelUrl: source.reelUrl!, videoUrl })).rejects.toThrow('untrusted_url');
+    }
+    expect(await env.DB.prepare('SELECT source_json FROM jobs WHERE id=?').bind(id).first('source_json')).toBe(JSON.stringify(source));
+    expect(api.fetcher).not.toHaveBeenCalled();
+    expect(api.creates()).toBe(0);
+  });
+  it('does not count a sent reminder as successful automatic publishing', async () => {
+    const api = mockApi();
+    const original = api.fetcher.getMockImplementation()!;
+    api.fetcher.mockImplementation(async (input, init) => {
+      if (String(input) === 'https://api.buffer.com' && !JSON.parse(String(init?.body)).query.includes('mutation')) {
+        return Response.json({ data: { post: { id: 'post', status: 'sent', schedulingType: 'notification' } } });
+      }
+      return original(input, init);
+    });
+    const id = await enqueue(bindings(), parseApiMessage(message(), '111', ['222', '444'], 0)[0]!);
+    await processJob(bindings(), id);
+    await refreshPosts(bindings(), id);
+    expect(await env.DB.prepare('SELECT state FROM jobs WHERE id=?').bind(id).first('state')).toBe('failed');
+    expect(api.creates()).toBe(2);
+    expect(await env.MEDIA.head(`meme-autoposter/${id}.mp4`)).toBeNull();
   });
 });
