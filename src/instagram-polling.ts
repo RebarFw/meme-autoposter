@@ -4,6 +4,7 @@ import { reelUrl } from './security';
 import { enqueue, processJob, settings } from './jobs';
 import { sha256 } from './security';
 import { AppError, errorCode, log, type Env } from './types';
+import { cloudflareCapacity } from './cloudflare-usage';
 
 interface PollState {
   startedAt: number;
@@ -65,6 +66,7 @@ export async function validatePolling(env: Env) {
 
 export async function pollInstagram(env: Env): Promise<void> {
   if (env.INGEST_MODE !== 'polling') return;
+  if (!(await cloudflareCapacity(env)).allowed) return;
   await initializePolling(env);
   if (!env.OWNER_IG_SENDER_ID || !env.META_ACCESS_TOKEN || !env.BUFFER_API_KEY || env.REPOST_PERMISSION_CONFIRMED !== 'true') return;
   const recipients = await settings<string[]>(env, 'recipient_ids');

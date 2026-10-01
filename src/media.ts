@@ -1,5 +1,6 @@
 import { AppError, type Env, type Job } from './types';
 import { constantTimeEqual } from './security';
+import { reserveCloudflareMedia } from './cloudflare-usage';
 
 export async function storeVideo(env: Env, response: Response, key: string, expiresAt: number): Promise<number> {
   const max = Math.min(Number(env.MAX_VIDEO_BYTES) || 26_214_400, 100_000_000);
@@ -27,11 +28,18 @@ export async function storeVideo(env: Env, response: Response, key: string, expi
     }
     if (new TextDecoder().decode(prefix.subarray(4,8)) !== 'ftyp') throw new AppError('video_signature_invalid');
   } catch (error) { await reader.cancel().catch(() => {}); throw error; }
+  try { await reserveCloudflareMedia(env, key, length, expiresAt); }
+  catch (error) { await reader.cancel().catch(() => {}); throw error; }
   const stream = new FixedLengthStream(length);
   const writer = stream.writable.getWriter();
   const upload = env.MEDIA.put(key, stream.readable, {
     httpMetadata: { contentType: 'video/mp4', cacheControl: 'private, no-store' },
     customMetadata: { expiresAt: String(expiresAt) },
+  }).catch(async error => {
+    // A quota reservation may reject before R2 consumes the stream. Unblock
+    // the producer instead of leaving its first write waiting forever.
+    await stream.readable.cancel(error).catch(() => {});
+    throw error;
   });
   const pump = (async () => {
     let size = initialSize;

@@ -1,6 +1,6 @@
 import { wrangler } from './wrangler.mjs';
 
-const expected = ['ADMIN_TOKEN', 'BUFFER_API_KEY', 'META_VERIFY_TOKEN', 'META_APP_SECRET', 'META_ACCESS_TOKEN', 'OWNER_IG_SENDER_ID', 'DOWNLOADER_API_KEY'];
+const expected = ['ADMIN_TOKEN', 'BUFFER_API_KEY', 'META_VERIFY_TOKEN', 'META_APP_SECRET', 'META_ACCESS_TOKEN', 'OWNER_IG_SENDER_ID', 'DOWNLOADER_API_KEY', 'CLOUDFLARE_USAGE_TOKEN'];
 try {
   // Never display unrecognized names: an accidental paste can put a credential
   // into the name itself. Suppress raw Wrangler output even when listing fails.

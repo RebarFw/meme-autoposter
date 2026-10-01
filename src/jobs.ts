@@ -1,5 +1,6 @@
 import { BufferClient } from './buffer';
 import { createCaption } from './caption';
+import { cloudflareCapacity, requireCloudflareCapacity } from './cloudflare-usage';
 import { downloadVideo } from './downloaders';
 import { notifyOwner } from './meta';
 import { storeVideo, temporaryMediaUrl } from './media';
@@ -16,6 +17,7 @@ export async function saveSetting(env: Env, key: string, value: unknown): Promis
 }
 
 export async function enqueue(env: Env, source: ReelSource): Promise<string> {
+  await requireCloudflareCapacity(env);
   const jobId = await sha256(`${source.recipientId}:${source.messageId}`);
   const now = Date.now();
   const result = await env.DB.prepare('INSERT OR IGNORE INTO jobs(id, source_json, recipient_id, next_run_at, created_at, updated_at) VALUES (?,?,?,?,?,?)')
@@ -170,6 +172,7 @@ async function checkPosts(env: Env, job: Job): Promise<void> {
 
 export async function processJob(env: Env, id: string): Promise<void> {
   if (!env.BUFFER_API_KEY || !env.PUBLIC_BASE_URL || env.REPOST_PERMISSION_CONFIRMED !== 'true') return;
+  if (!(await cloudflareCapacity(env)).allowed) return;
   // Process short stages immediately; durable cron recovery handles slow/killed invocations.
   for (let i = 0; i < 3; i++) {
     const job = await claimJob(env, id);
@@ -179,6 +182,15 @@ export async function processJob(env: Env, id: string): Promise<void> {
       else if (job.state === 'ready') await publish(env, job);
       else await checkPosts(env, job);
     } catch (error) {
+      const code = errorCode(error);
+      if (code.startsWith('cloudflare_')) {
+        // A concurrent quota reservation can stop a stage after its initial
+        // capacity check. Preserve it for resumption and keep retry allowance.
+        if (job.state === 'pending') await env.DB.prepare('UPDATE jobs SET attempts=? WHERE id=? AND lease_token=?').bind(job.attempts, job.id, job.lease_token).run();
+        await updateJob(env, job, job.state, code, 60_000);
+        log('job_quota_paused', { job: job.id, stage: job.state, code });
+        return;
+      }
       const retry = (!(error instanceof AppError) || error.retryable) && (job.state !== 'pending' || job.attempts < 4);
       log('job_stage_failed', { job: job.id, stage: job.state, code: errorCode(error), retry });
       // Re-read cleanup metadata written during this stage.

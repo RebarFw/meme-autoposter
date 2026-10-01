@@ -1,5 +1,7 @@
 import { BufferClient } from './buffer';
 import { apifyBudgetStatus } from './apify-budget';
+import { CloudflareUsageError, cleanupCloudflareReservations, cloudflareCapacity, requireCloudflareCapacity, withCloudflareR2Guard } from './cloudflare-usage';
+import { probeCloudflareGuard } from './cloudflare-probe';
 import { diagnoseDownload, probeApifyDownload, probeThirdPartyDownload } from './download-diagnostics';
 import { enqueue, maintenance, processJob, refreshPosts, retryDownload, saveSetting, settings } from './jobs';
 import { metaRequest, parseMessages } from './meta';
@@ -16,6 +18,13 @@ const json = (value: unknown, status = 200) => Response.json(value, { status, he
 async function admin(request: Request, env: Env, path: string): Promise<Response> {
   const auth = request.headers.get('authorization') ?? '';
   if (!env.ADMIN_TOKEN || !auth.startsWith('Bearer ') || !await constantTimeEqual(auth.slice(7), env.ADMIN_TOKEN)) return json({ error: 'unauthorized' }, 401);
+  if (path === '/admin/cloudflare/usage' && request.method === 'GET') return json(await cloudflareCapacity(env));
+  if (path === '/admin/cloudflare/validate' && request.method === 'GET') {
+    try { return json(await cloudflareCapacity({ ...env, CLOUDFLARE_USAGE_GUARD: 'true' })); }
+    catch (error) { if (error instanceof CloudflareUsageError) return json({ error: error.code, facts: error.facts }, 503); throw error; }
+  }
+  if (path === '/admin/cloudflare/probe' && request.method === 'POST') return json(await probeCloudflareGuard(env));
+  if (!['/admin/status', '/admin/apify/budget', '/admin/owner/status'].includes(path)) await requireCloudflareCapacity(env);
   if (path === '/admin/owner/start' && request.method === 'POST') return json(await startOwnerSetup(env));
   if (path === '/admin/owner/import' && request.method === 'POST') return json(await importOwnerSetup(env, JSON.parse(new TextDecoder().decode(await limitedBytes(request.body, 2048)))));
   if (path === '/admin/owner/status' && request.method === 'GET') return json(await ownerSetupStatus(env));
@@ -80,6 +89,7 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    env = withCloudflareR2Guard(env);
     const path = new URL(request.url).pathname;
     try {
       if (path === '/privacy' || path === '/privacy/') return privacyResponse(request.method);
@@ -130,6 +140,16 @@ export default {
     }
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil((async () => { await initializePolling(env); await pollInstagram(env); await maintenance(env); })().catch(error => log('maintenance_failed', { code: errorCode(error) })));
+    env = withCloudflareR2Guard(env);
+    ctx.waitUntil((async () => {
+      const capacity = await cloudflareCapacity(env);
+      if (!capacity.allowed) {
+        // R2 operations/storage can pause while free deletes remain useful.
+        // If the daily Workers/D1 budget is low, leave cleanup to lifecycle.
+        if (capacity.code?.startsWith('cloudflare_r2_')) await cleanupCloudflareReservations(env);
+        log('cloudflare_quota_paused', { code: capacity.code }); return;
+      }
+      await initializePolling(env); await pollInstagram(env); await maintenance(env);
+    })().catch(error => log('maintenance_failed', { code: errorCode(error) })));
   },
 } satisfies ExportedHandler<Env>;

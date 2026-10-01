@@ -30,6 +30,8 @@ After securely installing a downloader token, `npm run download:probe-apify` per
 
 ## Cleanup and bucket lifecycle
 
+The [Cloudflare usage guard](cloudflare-usage.md) targets 99% of the free allowances with extra room for ongoing work. `npm run cloudflare:usage` reports the current capacity and pause code; `cloudflare:validate` verifies the real API reader, and `cloudflare:probe` explicitly tests guarded R2 upload/read/deletion without posts. Missing or stale measurements pause work. Daily stops persist until a newly verified UTC day; R2 operation stops use a conservative 31-day window. Existing delivery reservations/tombstones are preserved. A long pause can expire media or exceed Meta's available history. The guard cannot guarantee an exact billing cutoff, stop incoming request counts or stop other account users; keep Workers/D1 on Free and see the linked limitations before relying on it for costs.
+
 The Worker deletes media promptly after both `sent` statuses, or after known failures no longer need it. Hard link expiry is 24 hours by default, capped at 48 hours. Minute cron cleanup and an hourly orphan sweep delete objects. Only the `meme-autoposter/` prefix is owned by this app.
 
 An independent R2 lifecycle rule expires this prefix after two days as protection against disabled cron or a deleted Worker. The deployment tooling installs this targeted rule while preserving existing lifecycle rules. D1 capability expiry continues to enforce the shorter 24-hour access window. Lifecycle physical deletion is asynchronous, not an exact deletion time. Never install a whole-bucket expiry rule on a shared bucket.

@@ -31,6 +31,9 @@
     }
   },
   "vars": {
+    "CLOUDFLARE_USAGE_GUARD": "true",
+    "CLOUDFLARE_ACCOUNT_ID": "97d19512e831722d5d48aa2d05086716",
+    "CLOUDFLARE_DATABASE_ID": "1b806c2e-6ced-4845-a694-3fbf13af0b79",
     "INGEST_MODE": "polling",
     "DOWNLOADER_PROVIDER": "apify",
     "META_API_VERSION": "v26.0",
