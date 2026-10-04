@@ -13,9 +13,11 @@ beforeEach(async () => { await env.DB.batch([env.DB.prepare("DELETE FROM setting
 
 it('uses official Graph metadata for ambiguous current post shares and requires a Reel', async () => {
   const fetcher = vi.spyOn(globalThis,'fetch').mockImplementation(async input => String(input).includes('graph.instagram.com')
-    ? Response.json({media_type:'VIDEO',media_product_type:'REELS',media_url:'https://scontent.cdninstagram.com/clip.mp4'}) : video());
+    ? Response.json({media_type:'VIDEO',media_product_type:'REELS',media_url:'https://scontent.cdninstagram.com/clip.mp4',caption:'Actual title @owner #original'}) : video());
   const result = await new MetaGraphDownloader().download(source,bindings);
   expect(result.provider).toBe('meta-graph');
+  expect(result.caption).toBe('Actual title @owner #original');
+  expect(String(fetcher.mock.calls[0]![0])).toContain('permalink,caption');
   expect(fetcher).toHaveBeenCalledTimes(2);
   fetcher.mockResolvedValue(Response.json({media_type:'IMAGE',media_product_type:'FEED',media_url:'https://scontent.cdninstagram.com/image.jpg'}));
   await expect(new MetaGraphDownloader().download(source,bindings)).rejects.toThrow('meta_media_not_reel');
@@ -23,9 +25,10 @@ it('uses official Graph metadata for ambiguous current post shares and requires 
 
 it('resolves published video metadata only on the canonical Reel page', async () => {
   vi.spyOn(globalThis,'fetch').mockImplementation(async input => String(input).includes('instagram.com/reel/')
-    ? new Response('<meta property="og:video:secure_url" content="https://scontent.cdninstagram.com/clip.mp4?a=1&amp;b=2">') : video());
+    ? new Response('<meta property="og:video:secure_url" content="https://scontent.cdninstagram.com/clip.mp4?a=1&amp;b=2"><script>{"caption":"Actual original #reel"}</script>') : video());
   const result = await new PublicPageDownloader().download({...source,kind:'reel',reelUrl:'https://www.instagram.com/reel/ABCdef123/'});
   expect(result.provider).toBe('instagram-public-page');
+  expect(result.caption).toBe('Actual original #reel');
 });
 
 it('optional API uses its explicit adapter contract and requires Reel evidence for ambiguous shares', async () => {
@@ -33,12 +36,12 @@ it('optional API uses its explicit adapter contract and requires Reel evidence f
     if(String(input).includes('api.downloader.example')) {
       expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer fake-optional-key');
       expect(JSON.parse(String(init?.body)).mediaId).toBe('123');
-      return Response.json({videoUrl:'https://scontent.cdninstagram.com/clip.mp4',isReel:true});
+      return Response.json({videoUrl:'https://scontent.cdninstagram.com/clip.mp4',isReel:true,caption:'Original #optional',hashtags:['optional']});
     }
     return video();
   });
   const optional = {...bindings,DOWNLOADER_API_URL:'https://api.downloader.example/resolve',DOWNLOADER_API_KEY:'fake-optional-key'};
-  expect((await new ApiVideoDownloader().download(source,optional)).provider).toBe('optional-downloader-api');
+  expect(await new ApiVideoDownloader().download(source,optional)).toMatchObject({ provider:'optional-downloader-api',caption:'Original #optional',hashtags:['optional'] });
   fetcher.mockResolvedValue(Response.json({videoUrl:'https://scontent.cdninstagram.com/clip.mp4',isReel:false}));
   await expect(new ApiVideoDownloader().download(source,optional)).rejects.toThrow('not_reel');
 });
@@ -64,15 +67,16 @@ it('uses the real Apify Actor contract, caps costs and keeps the key away from m
       expect(url.searchParams.get('maxTotalChargeUsd')).toBe('0.0073');
       expect(url.searchParams.get('maxItems')).toBe('1');
       expect(url.searchParams.get('limit')).toBe('1');
+      expect(url.searchParams.get('fields')).toBe('shortCode,type,productType,videoUrl,caption,hashtags');
       expect(url.searchParams.has('token')).toBe(false);
       expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer fake-apify-api-key');
       expect(JSON.parse(String(init?.body))).toEqual({ username: [apifySource.reelUrl], resultsLimit: 1, includeSharesCount: false, includeTranscript: false, includeDownloadedVideo: false });
-      return Response.json([apifyItem]);
+      return Response.json([{...apifyItem,caption:'The real original caption @author #funny',hashtags:['funny']}]);
     }
     expect(new Headers(init?.headers).has('Authorization')).toBe(false);
     return video();
   });
-  expect((await new ApifyVideoDownloader().download(apifySource, apifyBindings)).provider).toBe('apify-instagram-reel');
+  expect(await new ApifyVideoDownloader().download(apifySource, apifyBindings)).toMatchObject({ provider:'apify-instagram-reel',caption:'The real original caption @author #funny',hashtags:['funny'] });
   expect(fetcher).toHaveBeenCalledTimes(5);
 });
 

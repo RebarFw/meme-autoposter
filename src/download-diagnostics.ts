@@ -2,6 +2,7 @@ import { limitedBytes, META_MEDIA_HOSTS, reelUrl, secureUrl } from './security';
 import { AppError, errorCode, type Env, type ReelSource } from './types';
 import { ApifyVideoDownloader, configuredThirdPartyProviders, PUBLIC_PAGE_HEADERS } from './downloaders';
 import { SiteResponseError } from './downloader-providers/shared';
+import { CAPTION_LIMIT, captionLength, createCaption } from './caption';
 
 export async function probeThirdPartyDownload(env: Env, name: string) {
   const provider = configuredThirdPartyProviders(env).find(p => p.name === name);
@@ -34,6 +35,7 @@ export async function probeApifyDownload(env: Env) {
   if (!provider.supports(source, env)) throw new AppError('apify_not_configured');
   try {
     const video = await provider.download(source, env);
+    const caption = createCaption(video.caption ?? source.title, video.hashtags);
     const length = Number(video.response.headers.get('content-length'));
     const reader = video.response.body!.getReader();
     let bytes = 0;
@@ -46,7 +48,10 @@ export async function probeApifyDownload(env: Env) {
       }
       if (bytes !== length) throw new AppError('video_length_mismatch');
     } catch (error) { await reader.cancel().catch(() => {}); throw error; }
-    return { provider: provider.name, resolved: true, contentType: 'video/mp4', bytes, mp4SignatureVerified: true, fullDownloadVerified: true };
+    return { provider: provider.name, resolved: true, contentType: 'video/mp4', bytes, mp4SignatureVerified: true, fullDownloadVerified: true,
+      sourceCaptionPresent: !!video.caption?.trim(), sourceHashtagCount: video.hashtags?.length ?? 0,
+      outputHashtagCount: caption.match(/#[\p{L}\p{N}\p{M}_]+/gu)?.length ?? 0, mentionsAbsent: !/[@\uFF20]/.test(caption),
+      captionFitsBuffer: captionLength(caption) <= CAPTION_LIMIT };
   } catch (error) { return { provider: provider.name, resolved: false, code: errorCode(error) }; }
 }
 

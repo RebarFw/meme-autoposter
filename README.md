@@ -152,7 +152,9 @@ Cleanup requires cron to run. If the Worker is removed, disabled or its quota is
 
 ## Caption and owner confirmation
 
-A deterministic generator selects short captions such as “had to share this” and adds `#fyp #memes #funny`. It uses no paid AI API, copies no untrusted source caption and does not pretend to understand video content.
+The app uses the original Reel's caption and hashtags instead of preset titles. Apify returns `caption` and `hashtags` in the same existing, budget-guarded download request; Meta media metadata, embedded public post metadata and the optional adapter can also supply captions. When those are absent, a shared Reel title supplied by Meta is used. Full `@mentions` are removed, including dotted, adjacent and Unicode handles; the remaining original wording, emoji and line breaks are retained. This uses no paid AI, transcription or OCR.
+
+Both channels receive the same cleaned caption. Duplicate hashtags are removed; up to three original tags are retained alongside the required `#fyp #memes`, within Buffer's current five-hashtag limit. Text is bounded to Buffer's Instagram API limit of 2,196 UTF-16 units, counting line breaks as two, and also fits TikTok video captions. If no original caption is available, it posts only available hashtags plus the required pair. It does not invent a replacement title. Long captions/tags may be shortened to fit. Already submitted posts keep their existing captions and delivery records.
 
 Optional DM confirmation is off by default. Set `ENABLE_OWNER_DM=true` and redeploy after messaging access is verified. The Worker sends exactly `✅ Posted to Instagram + TikTok` only after both posts are actually sent and within the standard messaging window. Notification errors do not retry posts or undo completion.
 

@@ -7,6 +7,7 @@ import { FastDlDownloader } from './downloader-providers/fastdl';
 import { SaveFromDownloader } from './downloader-providers/savefrom';
 import { SnapInstaDownloader } from './downloader-providers/snapinsta';
 import { APIFY_RUN_MAX_USD, reserveApifyRun } from './apify-budget';
+import { sourceCaption, sourceHashtags } from './caption';
 export type { DownloadedVideo, VideoDownloader } from './video-downloader';
 
 // Anonymous public-page metadata requests need a supported web client header;
@@ -30,15 +31,24 @@ export class MetaGraphDownloader implements VideoDownloader {
   supports(source: ReelSource, env: Env): boolean { return !!source.mediaId && !!env.META_ACCESS_TOKEN; }
   async download(source: ReelSource, env: Env, parent?: AbortSignal): Promise<DownloadedVideo> {
     const signal = downloadSignal(parent, 35_000);
-    const media = await metaRequest<{ media_type?: string; media_product_type?: string; media_url?: string; permalink?: string }>(env,
-      `${encodeURIComponent(source.mediaId!)}?fields=media_type,media_product_type,media_url,permalink`, { signal });
+    const media = await metaRequest<{ media_type?: string; media_product_type?: string; media_url?: string; permalink?: string; caption?: unknown }>(env,
+      `${encodeURIComponent(source.mediaId!)}?fields=media_type,media_product_type,media_url,permalink,caption`, { signal });
     if (media.media_type !== 'VIDEO' || (media.media_product_type !== 'REELS' && !reelUrl(media.permalink)) || !media.media_url) throw new AppError('meta_media_not_reel');
-    return videoAt(media.media_url, META_MEDIA_HOSTS, this.name, env, signal);
+    return { ...await videoAt(media.media_url, META_MEDIA_HOSTS, this.name, env, signal), caption: sourceCaption(media.caption) };
   }
 }
 
 function decodeHtml(value: string): string {
   return value.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#x([a-f0-9]+);/gi, (_, n) => String.fromCharCode(parseInt(n,16))).replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n,10)));
+}
+
+function publicPostCaption(html: string): string | undefined {
+  // Inspect post text only after this provider has found a video. Failed
+  // public pages must not spend more Free-plan CPU looking for a caption.
+  const encoded = /"caption"\s*:\s*("(?:\\.|[^"\\])*")/.exec(html)?.[1]
+    ?? /"edge_media_to_caption"\s*:\s*\{\s*"edges"\s*:\s*\[\s*\{\s*"node"\s*:\s*\{\s*"text"\s*:\s*("(?:\\.|[^"\\])*")/.exec(html)?.[1];
+  if (encoded) { try { return sourceCaption(JSON.parse(encoded)); } catch { /* Optional metadata cannot break a valid download. */ } }
+  return undefined;
 }
 
 export class PublicPageDownloader implements VideoDownloader {
@@ -53,14 +63,14 @@ export class PublicPageDownloader implements VideoDownloader {
     for (const tag of metaTags) {
       if (!/property\s*=\s*["']og:video(?::url|:secure_url)?["']/i.test(tag)) continue;
       const value = /content\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1];
-      if (value) return videoAt(decodeHtml(value), META_MEDIA_HOSTS, this.name, env, signal);
+      if (value) return { ...await videoAt(decodeHtml(value), META_MEDIA_HOSTS, this.name, env, signal), caption: publicPostCaption(html) };
     }
     // Narrowly accept video_url from the Reel's embedded JSON, never eval scripts.
     const encoded = /"video_url"\s*:\s*("(?:\\.|[^"\\])+")/.exec(html)?.[1];
     if (encoded) {
       let url: string;
       try { url = JSON.parse(encoded); } catch { throw new AppError('public_page_invalid_media'); }
-      return videoAt(url, META_MEDIA_HOSTS, this.name, env, signal);
+      return { ...await videoAt(url, META_MEDIA_HOSTS, this.name, env, signal), caption: publicPostCaption(html) };
     }
     throw new AppError('public_page_no_video');
   }
@@ -81,11 +91,11 @@ export class ApiVideoDownloader implements VideoDownloader {
       body: JSON.stringify({ url: source.reelUrl, mediaId: source.mediaId, attachmentUrl: source.attachmentUrl }),
     }); } catch { throw new AppError('downloader_api_network_error', true); }
     if (!response.ok) { await response.body?.cancel(); throw new AppError('downloader_api_error', response.status === 429 || response.status >= 500); }
-    let data: { videoUrl?: string; contentType?: string; isReel?: boolean };
+    let data: { videoUrl?: string; contentType?: string; isReel?: boolean; caption?: unknown; hashtags?: unknown };
     try { data = JSON.parse(new TextDecoder().decode(await limitedBytes(response.body, 64_000))); } catch { throw new AppError('downloader_api_invalid_response'); }
     if (!data.videoUrl || (source.kind !== 'reel' && data.isReel !== true)) throw new AppError('downloader_api_not_reel');
     const hosts = [...META_MEDIA_HOSTS, ...(env.DOWNLOADER_MEDIA_HOSTS?.split(',').map(h => h.trim()).filter(h => /^[a-z0-9.-]+$/.test(h)) ?? [])];
-    return videoAt(data.videoUrl, hosts, this.name, env, signal);
+    return { ...await videoAt(data.videoUrl, hosts, this.name, env, signal), caption: sourceCaption(data.caption), hashtags: sourceHashtags(data.hashtags) };
   }
 }
 
@@ -99,7 +109,7 @@ export class ApifyVideoDownloader implements VideoDownloader {
     const token = env.DOWNLOADER_API_KEY.trim();
     if (!/^[A-Za-z0-9_-]{10,256}$/.test(token)) throw new AppError('invalid_downloader_key_format');
     await reserveApifyRun(env, signal);
-    const query = new URLSearchParams({ timeout: '60', maxTotalChargeUsd: String(APIFY_RUN_MAX_USD), maxItems: '1', limit: '1', clean: 'true', fields: 'shortCode,type,productType,videoUrl' });
+    const query = new URLSearchParams({ timeout: '60', maxTotalChargeUsd: String(APIFY_RUN_MAX_USD), maxItems: '1', limit: '1', clean: 'true', fields: 'shortCode,type,productType,videoUrl,caption,hashtags' });
     let response: Response;
     try {
       response = await fetch('https://api.apify.com/v2/actors/apify~instagram-reel-scraper/run-sync-get-dataset-items?' + query, {
@@ -118,7 +128,7 @@ export class ApifyVideoDownloader implements VideoDownloader {
     const item = items[0];
     if (!item || typeof item !== 'object' || item.shortCode !== new URL(url).pathname.split('/')[2] || item.type !== 'Video' || item.productType !== 'clips' || typeof item.videoUrl !== 'string') throw new AppError('apify_result_not_requested_reel');
     // The key is sent only to Apify; media downloads never inherit its headers.
-    return videoAt(item.videoUrl, META_MEDIA_HOSTS, this.name, env, signal);
+    return { ...await videoAt(item.videoUrl, META_MEDIA_HOSTS, this.name, env, signal), caption: sourceCaption(item.caption), hashtags: sourceHashtags(item.hashtags) };
   }
 }
 

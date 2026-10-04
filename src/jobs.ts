@@ -87,16 +87,22 @@ async function download(env: Env, job: Job): Promise<void> {
   const channels = await settings<Channel[]>(env, 'channels');
   if (!channels || channels.length !== 2) throw new AppError('channels_not_configured', true);
   const source: ReelSource = JSON.parse(job.source_json);
-  const caption = job.caption ?? await createCaption(job.id);
   const key = `meme-autoposter/${job.id}.mp4`;
   const token = crypto.randomUUID().replaceAll('-','') + crypto.randomUUID().replaceAll('-','');
   const ttl = Math.min(Math.max(Number(env.MEDIA_TTL_SECONDS) || 86400, 3600), 172800);
   const expires = Date.now() + ttl * 1000;
   // Persist cleanup info before upload; a killed invocation cannot leave an untracked object.
-  const prepared = await env.DB.prepare('UPDATE jobs SET object_key=?, media_token=?, media_expires_at=?, caption=?, attempts=attempts+1 WHERE id=? AND lease_token=?')
-    .bind(key, token, expires, caption, job.id, job.lease_token).run();
+  const prepared = await env.DB.prepare('UPDATE jobs SET object_key=?, media_token=?, media_expires_at=?, attempts=attempts+1 WHERE id=? AND lease_token=?')
+    .bind(key, token, expires, job.id, job.lease_token).run();
   if (!prepared.meta.changes) return;
   const video = await downloadVideo(source, env, job.id);
+  const caption = createCaption(video.caption ?? source.title, video.hashtags);
+  // Store the cleaned caption durably before exposing media to Buffer. Retry
+  // old pre-download jobs with the new policy; accepted deliveries never reset.
+  try {
+    const saved = await env.DB.prepare('UPDATE jobs SET caption=? WHERE id=? AND lease_token=?').bind(caption, job.id, job.lease_token).run();
+    if (!saved.meta.changes) { await video.response.body?.cancel(); return; }
+  } catch (error) { await video.response.body?.cancel().catch(() => {}); throw error; }
   const bytes = await storeVideo(env, video.response, key, expires);
   await env.DB.batch(channels.map(c => env.DB.prepare('INSERT OR IGNORE INTO deliveries(job_id, service, channel_id, updated_at) VALUES (?,?,?,?)').bind(job.id, c.service, c.id, Date.now())));
   log('media_stored', { job: job.id, provider: video.provider, bytes });

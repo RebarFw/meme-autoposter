@@ -79,11 +79,14 @@ describe('Meta API message parsing', () => {
 
 describe('durable owner-only polling', () => {
   it('creates both immediate posts once and avoids detail reads for an unchanged conversation', async () => {
-    const api = mockApi();
+    const api = mockApi([message({ shares: { data: [{ type: 'ig_reel', id: 'media-1', url: 'https://lookaside.fbsbx.com/reel.mp4', name: 'A real shared caption @author #original' }] } })]);
     await pollInstagram(bindings());
     expect(api.creates()).toBe(2);
     expect(await countJobs()).toBe(1);
     expect((await pollingStatus(bindings())).received).toBe(1);
+    const sentCaptions = api.fetcher.mock.calls.filter(([url, init]) => String(url) === 'https://api.buffer.com' && JSON.parse(String(init?.body)).query.includes('mutation'))
+      .map(([, init]) => JSON.parse(String(init?.body)).variables.input.text);
+    expect(sentCaptions).toEqual(Array(2).fill('A real shared caption #original\n\n#fyp #memes'));
     api.fetcher.mockClear();
     await due();
     await pollInstagram(bindings());
@@ -126,7 +129,7 @@ describe('durable owner-only polling', () => {
     api.fetcher.mockImplementation(async (input, init) => {
       if (String(input).includes('www.instagram.com/reel/')) return new Response('<html></html>');
       const guard = apifyGuardResponse(input); if (guard) return guard;
-      if (String(input).includes('api.apify.com')) return Response.json([{ shortCode: 'ABCdef123', type: 'Video', productType: 'clips', videoUrl: 'https://lookaside.fbsbx.com/reel.mp4' }]);
+      if (String(input).includes('api.apify.com')) return Response.json([{ shortCode: 'ABCdef123', type: 'Video', productType: 'clips', videoUrl: 'https://lookaside.fbsbx.com/reel.mp4', caption: 'That one friend @friend.name 😂\n#relatable #friends', hashtags: ['relatable', 'friends'] }]);
       return original(input, init);
     });
     const configured: Env = { ...bindings(), DOWNLOADER_PROVIDER: 'apify', DOWNLOADER_API_KEY: 'fake-apify-api-key' };
@@ -136,6 +139,10 @@ describe('durable owner-only polling', () => {
     expect(api.creates()).toBe(2);
     expect(await countJobs()).toBe(1);
     expect(api.fetcher.mock.calls.filter(([url]) => String(url).includes('api.apify.com/v2/actors/'))).toHaveLength(1);
+    const captions = api.fetcher.mock.calls.filter(([url, init]) => String(url) === 'https://api.buffer.com' && JSON.parse(String(init?.body)).query.includes('mutation'))
+      .map(([, init]) => JSON.parse(String(init?.body)).variables.input.text);
+    expect(captions).toEqual(Array(2).fill('That one friend 😂\n#relatable #friends\n\n#fyp #memes'));
+    expect(await env.DB.prepare('SELECT caption FROM jobs').first('caption')).toBe(captions[0]);
   });
   it('publishes a native share through a free third-party fallback once even after repeated polling and job processing', async () => {
     const api = mockApi([message({ shares: { data: [{ link: 'https://www.instagram.com/reel/ABCdef123/' }] } })]);
@@ -240,12 +247,14 @@ describe('safe pre-publication download recovery', () => {
     await env.DB.prepare("UPDATE jobs SET state='completed' WHERE id=?").bind(id).run();
     const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const guard = apifyGuardResponse(input); if (guard) return guard;
-      if (String(input).includes('api.apify.com')) return Response.json([{ shortCode: 'ABCdef123', type: 'Video', productType: 'clips', videoUrl: 'https://lookaside.fbsbx.com/reel.mp4' }]);
+      if (String(input).includes('api.apify.com')) return Response.json([{ shortCode: 'ABCdef123', type: 'Video', productType: 'clips', videoUrl: 'https://lookaside.fbsbx.com/reel.mp4', caption: 'Original @private_handle #reel', hashtags: ['reel'] }]);
       if (String(input).includes('fbsbx.com')) return new Response(mp4, { headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(mp4.length) } });
       throw new Error('Unexpected API');
     });
     const configured: Env = { ...bindings(), DOWNLOADER_PROVIDER: 'apify', DOWNLOADER_API_KEY: 'fake-apify-api-key' };
-    expect(await probeApifyDownload(configured)).toMatchObject({ resolved: true, bytes: mp4.length, fullDownloadVerified: true });
+    const probe = await probeApifyDownload(configured);
+    expect(probe).toMatchObject({ resolved: true, bytes: mp4.length, fullDownloadVerified: true, sourceCaptionPresent: true, sourceHashtagCount: 1, outputHashtagCount: 3, mentionsAbsent: true, captionFitsBuffer: true });
+    expect(JSON.stringify(probe)).not.toMatch(/Original|private_handle/);
     expect(await env.DB.prepare('SELECT state FROM jobs WHERE id=?').bind(id).first('state')).toBe('completed');
     expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM deliveries').first('n')).toBe(0);
     expect(await env.MEDIA.head(`meme-autoposter/${id}.mp4`)).toBeNull();

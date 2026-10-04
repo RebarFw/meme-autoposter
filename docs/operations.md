@@ -6,6 +6,8 @@ With `INGEST_MODE=polling`, status also reports the last successful scan, next a
 
 States: `pending` downloads; `ready` uploads are complete and Buffer creates are ready; `waiting` polls accepted posts; `completed` means both actual post statuses are `sent`; `failed` means definite failure; `attention` means a failed downloader, ambiguous Buffer result, stuck job or expired media. Each delivery remains separate.
 
+New downloads persist the original Reel caption after removing full `@mentions`, applying the shared text limit and retaining up to three source hashtags plus `#fyp #memes`. Caption metadata comes from the same downloader result; no second Actor run or paid language model is used. Missing original text produces hashtags alone. Protected `download:probe-apify` also reports caption presence, hashtag counts, mention removal and length validation as safe facts, without returning/logging caption contents. It creates no post. Completed/accepted deliveries are never reset or edited by a caption-policy deployment.
+
 ## Uncertain Buffer mutation
 
 Do not reset `unknown` or `submitting` to `pending`. Check the appropriate Buffer channel's recent posts and the stored post IDs. A network timeout can mean a post was created. Reconciliation must link the existing Buffer post ID, or establish that no create took place, before deliberately creating new content. The same original DM remains a tombstone and will not trigger again. This protects the no-duplicates requirement even across a crash between the remote API call and D1 result storage.
