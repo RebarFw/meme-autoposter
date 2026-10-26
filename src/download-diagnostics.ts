@@ -3,6 +3,7 @@ import { AppError, errorCode, type Env, type ReelSource } from './types';
 import { ApifyVideoDownloader, configuredThirdPartyProviders, PUBLIC_PAGE_HEADERS } from './downloaders';
 import { SiteResponseError } from './downloader-providers/shared';
 import { CAPTION_LIMIT, captionLength, createCaption } from './caption';
+import { videoStreamError } from './video-downloader';
 
 export async function probeThirdPartyDownload(env: Env, name: string) {
   const provider = configuredThirdPartyProviders(env).find(p => p.name === name);
@@ -52,7 +53,7 @@ export async function probeApifyDownload(env: Env) {
       sourceCaptionPresent: !!video.caption?.trim(), sourceHashtagCount: video.hashtags?.length ?? 0,
       outputHashtagCount: caption.match(/#[\p{L}\p{N}\p{M}_]+/gu)?.length ?? 0, mentionsAbsent: !/[@\uFF20]/.test(caption),
       captionFitsBuffer: captionLength(caption) <= CAPTION_LIMIT };
-  } catch (error) { return { provider: provider.name, resolved: false, code: errorCode(error) }; }
+  } catch (error) { return { provider: provider.name, resolved: false, code: errorCode(videoStreamError(error)) }; }
 }
 
 function urlFacts(raw: string) {

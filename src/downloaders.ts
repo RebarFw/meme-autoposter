@@ -1,4 +1,5 @@
-import { AppError, errorCode, log, type Env, type ReelSource } from './types';
+import { asyncApifyItems } from './apify-download';
+import { AppError, DownloadDeferred, errorCode, log, type Env, type ReelSource } from './types';
 import { limitedBytes, META_MEDIA_HOSTS, reelUrl, safeFetch, secureUrl } from './security';
 import { metaRequest } from './meta';
 import { downloadSignal, videoAt, type DownloadedVideo, type VideoDownloader } from './video-downloader';
@@ -102,7 +103,8 @@ export class ApiVideoDownloader implements VideoDownloader {
 export class ApifyVideoDownloader implements VideoDownloader {
   readonly name = 'apify-instagram-reel';
   supports(source: ReelSource, env: Env): boolean { return env.DOWNLOADER_PROVIDER === 'apify' && !!env.DOWNLOADER_API_KEY && !!reelUrl(source.reelUrl); }
-  async download(source: ReelSource, env: Env, parent?: AbortSignal): Promise<DownloadedVideo> {
+  async download(source: ReelSource, env: Env, parent?: AbortSignal, jobId?: string): Promise<DownloadedVideo> {
+    if (env.APIFY_ASYNC_DOWNLOADS === 'true' && jobId && /^[a-f0-9]{64}$/.test(jobId)) return this.fromItems(await asyncApifyItems(source, env, jobId), source, env, parent);
     const signal = downloadSignal(parent, 70_000);
     const url = reelUrl(source.reelUrl);
     if (!url || env.DOWNLOADER_PROVIDER !== 'apify' || !env.DOWNLOADER_API_KEY) throw new AppError('apify_not_configured');
@@ -124,8 +126,13 @@ export class ApifyVideoDownloader implements VideoDownloader {
     let items: unknown;
     try { items = JSON.parse(new TextDecoder().decode(await limitedBytes(response.body, 128_000))); }
     catch { throw new AppError('apify_invalid_response'); }
+    return this.fromItems(items, source, env, signal);
+  }
+  private async fromItems(items: unknown, source: ReelSource, env: Env, signal?: AbortSignal): Promise<DownloadedVideo> {
+    const url = reelUrl(source.reelUrl)!;
     if (!Array.isArray(items) || items.length !== 1) throw new AppError('apify_reel_not_found');
     const item = items[0];
+    if (item && typeof item === 'object' && item.error === 'restricted_page') throw new AppError('instagram_media_restricted');
     if (!item || typeof item !== 'object' || item.shortCode !== new URL(url).pathname.split('/')[2] || item.type !== 'Video' || item.productType !== 'clips' || typeof item.videoUrl !== 'string') throw new AppError('apify_result_not_requested_reel');
     // The key is sent only to Apify; media downloads never inherit its headers.
     return { ...await videoAt(item.videoUrl, META_MEDIA_HOSTS, this.name, env, signal), caption: sourceCaption(item.caption), hashtags: sourceHashtags(item.hashtags) };
@@ -147,11 +154,21 @@ export async function downloadVideo(source: ReelSource, env: Env, jobId: string,
   // Fit the entire chain and its streamed upload inside the job's 180s lease.
   const signal = downloadSignal(parent, 150_000);
   let retryable = false;
+  let apifyFailure: AppError | undefined;
   for (const provider of [...providers, ...configuredThirdPartyProviders(env)]) {
     if (!provider.supports(source, env)) continue;
+    // Parsing a large Instagram HTML page can itself exhaust the Free CPU
+    // budget. Production uses bounded metadata providers and native MP4 IO.
+    if (env.APIFY_ASYNC_DOWNLOADS === 'true' && provider.name === 'instagram-public-page') continue;
     if (signal.aborted) throw new AppError('downloader_deadline_exceeded', true);
-    try { return await provider.download(source, env, signal); }
-    catch (error) { retryable ||= error instanceof AppError && error.retryable; log('downloader_failed', { job: jobId, provider: provider.name, code: errorCode(error) }); }
+    try { return await provider.download(source, env, signal, jobId); }
+    catch (error) {
+      if (error instanceof DownloadDeferred) throw error;
+      if (provider.name === 'apify-instagram-reel' && error instanceof AppError) apifyFailure = error;
+      retryable ||= error instanceof AppError && error.retryable;
+      log('downloader_failed', { job: jobId, provider: provider.name, code: errorCode(error) });
+    }
   }
+  if (apifyFailure) throw apifyFailure;
   throw new AppError('no_downloader_could_resolve_reel', retryable);
 }

@@ -8,10 +8,11 @@ import { metaRequest, parseMessages } from './meta';
 import { diagnoseMeta } from './meta-diagnostics';
 import { acceptOwnerSetup, diagnoseOwnerSetup, finishOwnerSetup, importOwnerSetup, ownerSetupStatus, startOwnerSetup } from './owner-setup';
 import { serveMedia } from './media';
-import { initializePolling, pollInstagram, pollingStatus, validatePolling } from './instagram-polling';
+import { pollInstagram, pollingStatus, validatePolling } from './instagram-polling';
 import { privacyResponse } from './privacy';
 import { constantTimeEqual, limitedBytes, validSignature } from './security';
-import { AppError, errorCode, log, type Channel, type Env } from './types';
+import { AppError, errorCode, log, type Channel, type Env, type ReelSource } from './types';
+import { cloudTask, runScheduledTasks } from './scheduled-tasks';
 
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
 
@@ -24,7 +25,31 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
     catch (error) { if (error instanceof CloudflareUsageError) return json({ error: error.code, facts: error.facts }, 503); throw error; }
   }
   if (path === '/admin/cloudflare/probe' && request.method === 'POST') return json(await probeCloudflareGuard(env));
+  if (path === '/admin/tasks/cleanup-reservations' && request.method === 'POST') { await cleanupCloudflareReservations(env); return json({ cleaned: true }); }
+  if (path === '/admin/tasks/poll' && request.method === 'POST') {
+    await pollInstagram(env, { maxMessages: 1, processJobs: false, enqueueSource: async source => {
+      const result = await cloudTask(env, '/admin/tasks/enqueue', { source });
+      if (!/^[a-f0-9]{64}$/.test(result.jobId ?? '')) throw new AppError('invalid_scheduled_job');
+      return result.jobId!;
+    } });
+    return json({ checked: true });
+  }
+  if (path === '/admin/tasks/enqueue' && request.method === 'POST') {
+    const body = JSON.parse(new TextDecoder().decode(await limitedBytes(request.body, 8192)));
+    const source = body?.source as ReelSource | undefined;
+    const recipients = await settings<string[]>(env, 'recipient_ids');
+    if (!source || !['reel','shared-post'].includes(source.kind) || typeof source.messageId !== 'string' || !/^[\x21-\x7e]{1,512}$/.test(source.messageId) || !env.OWNER_IG_SENDER_ID || source.senderId !== env.OWNER_IG_SENDER_ID || !recipients?.includes(source.recipientId) || !Number.isFinite(source.timestamp) || source.timestamp < Date.now() - 48 * 3600_000 || source.timestamp > Date.now() + 300_000) throw new AppError('invalid_scheduled_source');
+    return json({ jobId: await enqueue(env, source) });
+  }
+  if (path === '/admin/tasks/job' && request.method === 'POST') {
+    const body = JSON.parse(new TextDecoder().decode(await limitedBytes(request.body, 256)));
+    if (!/^[a-f0-9]{64}$/.test(body?.jobId ?? '')) throw new AppError('invalid_job_id');
+    await processJob(env, body.jobId, 1, 1);
+    const job = await env.DB.prepare('SELECT state,next_run_at,lease_until FROM jobs WHERE id=?').bind(body.jobId).first<{ state: string; next_run_at: number; lease_until: number }>();
+    return json({ nextStage: !!job && ['pending','ready','waiting'].includes(job.state) && job.next_run_at <= Date.now() && job.lease_until <= Date.now() });
+  }
   if (!['/admin/status', '/admin/apify/budget', '/admin/owner/status'].includes(path)) await requireCloudflareCapacity(env);
+  if (path === '/admin/tasks/maintenance' && request.method === 'POST') return json({ jobIds: await maintenance(env, false) });
   if (path === '/admin/owner/start' && request.method === 'POST') return json(await startOwnerSetup(env));
   if (path === '/admin/owner/import' && request.method === 'POST') return json(await importOwnerSetup(env, JSON.parse(new TextDecoder().decode(await limitedBytes(request.body, 2048)))));
   if (path === '/admin/owner/status' && request.method === 'GET') return json(await ownerSetupStatus(env));
@@ -140,16 +165,6 @@ export default {
     }
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    env = withCloudflareR2Guard(env);
-    ctx.waitUntil((async () => {
-      const capacity = await cloudflareCapacity(env);
-      if (!capacity.allowed) {
-        // R2 operations/storage can pause while free deletes remain useful.
-        // If the daily Workers/D1 budget is low, leave cleanup to lifecycle.
-        if (capacity.code?.startsWith('cloudflare_r2_')) await cleanupCloudflareReservations(env);
-        log('cloudflare_quota_paused', { code: capacity.code }); return;
-      }
-      await initializePolling(env); await pollInstagram(env); await maintenance(env);
-    })().catch(error => log('maintenance_failed', { code: errorCode(error) })));
+    ctx.waitUntil(runScheduledTasks(env).catch(error => log('maintenance_failed', { code: errorCode(error) })));
   },
 } satisfies ExportedHandler<Env>;

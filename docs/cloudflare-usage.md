@@ -1,17 +1,17 @@
 # Cloudflare free usage guard
 
-The deployed guard targets **99%** of the published Workers Free, D1 Free and R2 Standard allowances. It pauses this app's ingestion and publishing when any guarded meter approaches its boundary. It does not upgrade subscriptions, enable paid products, change the Apify credit guard, or require a running PC.
+The deployed guard targets **90%** of the published Workers Free, D1 Free and R2 Standard allowances. It pauses this app's ingestion and publishing when any guarded meter approaches its boundary. It does not upgrade subscriptions, enable paid products, change the Apify credit guard, or require a running PC.
 
 | Meter | Published free allowance | Guard boundary |
 | --- | --- | --- |
-| Workers requests | 100,000 per UTC day | 99,000 |
-| D1 rows read | 5,000,000 per UTC day | 4,950,000 |
-| D1 rows written | 100,000 per UTC day | 99,000 |
-| D1 storage across account | 5 GB | 4.95 GB |
-| D1 storage in this database | 500 MB on Free | 495 MB |
-| R2 Standard Class A operations | 1,000,000 per month | 990,000 over the previous 31 days |
-| R2 Standard Class B operations | 10,000,000 per month | 9,900,000 over the previous 31 days |
-| R2 Standard storage | 10 GB-month | Conservative 9.9 GB instantaneous/peak cap |
+| Workers requests | 100,000 per UTC day | 90,000 |
+| D1 rows read | 5,000,000 per UTC day | 4,500,000 |
+| D1 rows written | 100,000 per UTC day | 90,000 |
+| D1 storage across account | 5 GB | 4.5 GB |
+| D1 storage in this database | 500 MB on Free | 450 MB |
+| R2 Standard Class A operations | 1,000,000 per month | 900,000 over the previous 31 days |
+| R2 Standard Class B operations | 10,000,000 per month | 9,000,000 over the previous 31 days |
+| R2 Standard storage | 10 GB-month | Conservative 9 GB instantaneous/peak cap |
 
 The app reserves extra room before starting work: ten requests, 1,000 D1 reads, 100 D1 writes, 1 MB database growth, ten Class A operations, twenty Class B operations and one maximum-size video. Consequently it can pause slightly before the numerical boundary. CPU/memory and other runtime restrictions remain Cloudflare's native Free-plan limits; this guard is not a meter for every Cloudflare product.
 
@@ -33,7 +33,7 @@ Polling and job processing stop before new downloads or Buffer submissions. Exis
 
 Known expired objects can still be deleted during an R2 pause because DeleteObject is free. If the daily Workers/D1 budget is paused, the independent two-day prefix lifecycle rule remains the cleanup fallback. It does not need this Worker or the PC to run. Lifecycle deletion is asynchronous.
 
-**This is a protective application cutoff, not a guaranteed account billing cap.** Cloudflare documents GraphQL analytics as distinct from billing measurements, and some datasets are sampled or delayed. Concurrent work, other applications and a sudden burst can use quota before analytics reflects it. Public requests, rejected requests and scheduled invocations still reach Workers; the app cannot stop them from counting merely by returning an error. Monitoring itself uses a small amount of Workers/D1 quota. It cannot stop activity by other clients in your account. Keep Workers/D1 on Free for their provider-enforced hard limits. R2 can bill excess use; budget alerts only notify and do not enforce a cap. No code can honestly guarantee an exact 99% stop or zero R2 charges under all account activity with these APIs.
+**This is a protective application cutoff, not a guaranteed account billing cap.** Cloudflare documents GraphQL analytics as distinct from billing measurements, and some datasets are sampled or delayed. Concurrent work, other applications and a sudden burst can use quota before analytics reflects it. Public requests, rejected requests and scheduled invocations still reach Workers; the app cannot stop them from counting merely by returning an error. Monitoring itself uses a small amount of Workers/D1 quota. It cannot stop activity by other clients in your account. Keep Workers/D1 on Free for their provider-enforced hard limits. R2 can bill excess use; budget alerts only notify and do not enforce a cap. No code can honestly guarantee an exact 90% stop or zero R2 charges under all account activity with these APIs.
 
 ## Operator checks
 

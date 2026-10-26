@@ -43,6 +43,11 @@
     "ALLOW_PUBLIC_PAGE_DOWNLOADER": "true",
     "THIRD_PARTY_DOWNLOADER_PROVIDERS": "videodropper,fastdl,savefrom,snapinsta",
     "REPOST_PERMISSION_CONFIRMED": "true",
-    "PUBLIC_BASE_URL": "https://meme-autoposter.meme-autoposter.workers.dev"
-  }
+    "PUBLIC_BASE_URL": "https://meme-autoposter.meme-autoposter.workers.dev",
+    "APIFY_ASYNC_DOWNLOADS": "true"
+  },
+  "account_id": "97d19512e831722d5d48aa2d05086716",
+  "compatibility_flags": [
+    "global_fetch_strictly_public"
+  ]
 }

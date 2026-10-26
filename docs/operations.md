@@ -45,3 +45,14 @@ Non-secret vars live in `wrangler.jsonc`; secrets belong in `wrangler secret put
 Do not rotate/delete the database to clear failures: permanent message tombstones prevent old webhook retries from posting duplicates. Back up the database before schema changes. The R2 bucket should keep public access disabled; no `r2.dev` URL is necessary.
 
 The operator authorized minute API polling on 2026-10-01 while retaining an unpublished Meta app. Do not change app mode or submit App Review as part of maintenance. Signed webhook requests remain authenticated and acknowledged in polling mode, with no posting jobs. A deliberate switch to webhook mode retains the same canonical recipient/message tombstones.
+
+
+## Free-plan CPU recovery (2026-10-26)
+
+The minute scheduler now invokes the existing Worker through authenticated public HTTPS stages: refresh usage, poll one new owner message, perform maintenance, then one download/publish/reconciliation stage at a time for at most three due jobs. Each invocation has its own native Free-plan CPU budget. The permanent job IDs and per-channel submission reservations are retained; uncertain or already accepted posts are never automatically recreated. Account and resource checks pin local deployment commands to the English account only.
+
+Validated MP4 data is transferred natively with FixedLengthStream/pipeTo instead of running JavaScript on every network chunk. Signature, MIME, trusted-host, exact-size, 25 MiB and private R2 validation still apply. Large public HTML parsing is skipped in the production async path to avoid another CPU overrun. Caption and hashtag processing remains the English policy.
+
+APIFY_ASYNC_DOWNLOADS=true persists a single capped 600-second Actor run and polls its dataset. Waiting does not consume ordinary download failure attempts or start another run. Terminal retries are delayed, capped at three starts per job, and limited to four recent in-flight starts. All starts retain the FREE-plan requirement, $0.0073 maximum run charge, $4.50 credit stop, 500-run ceiling and existing account cap.
+
+The account-wide Cloudflare usage guard now stops at 90% of the Workers/D1/R2 Standard allowances and fails closed on missing or stale measurements. Native R2 operation/storage reservations and two-day private-object lifecycle cleanup remain in force. No paid product, account upgrade, new queue or PC background process is required. Normal idle traffic is roughly four Worker invocations per minute, about 5,760/day; even the bounded busy-task maximum remains below 90,000/day for this Worker alone. Shared account activity still counts, and R2 usage guards are not a provider-enforced billing cap.

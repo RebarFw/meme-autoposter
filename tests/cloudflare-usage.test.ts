@@ -35,10 +35,10 @@ function mockUsage({ workers = 1000, writes = 1000, reads = 10000, a = 100, b = 
   });
 }
 
-it('reads account-wide usage, caches it, excludes free deletes and reports a 99 percent target', async () => {
+it('reads account-wide usage, caches it, excludes free deletes and reports a 90 percent target', async () => {
   const fetcher = mockUsage();
   const status = await cloudflareCapacity(bindings);
-  expect(status).toMatchObject({ enabled: true, allowed: true, targetPercent: 99, usage: { workers: 1000, rowsRead: 10000, rowsWritten: 1000, r2A: 100, r2B: 1000 } });
+  expect(status).toMatchObject({ enabled: true, allowed: true, targetPercent: 90, usage: { workers: 1000, rowsRead: 10000, rowsWritten: 1000, r2A: 100, r2B: 1000 } });
   await cloudflareCapacity(bindings);
   expect(fetcher).toHaveBeenCalledTimes(1);
   expect(JSON.stringify(status)).not.toContain('fake-cloudflare');
@@ -127,10 +127,20 @@ it('does not ingest or alter publishing jobs during a pause, keeps health workin
   const fetcher = mockUsage({ writes: CF_STOP.rowsWritten });
   await expect(enqueue(bindings, { messageId: 'quota-new-message', senderId: '111', recipientId: '222', timestamp: Date.now(), kind: 'reel' })).rejects.toThrow('cloudflare_d1_writes_daily_pause');
   expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE source_json LIKE '%quota-new-message%'").first('n')).toBe(0);
+  const original = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation(async (input, init) => {
+    if (String(input).startsWith('https://worker.example/')) {
+      const taskContext = createExecutionContext();
+      const response = await worker.fetch(new Request(String(input), init), bindings, taskContext);
+      await waitOnExecutionContext(taskContext);
+      return response;
+    }
+    return original(input, init);
+  });
   const ctx = createExecutionContext();
   worker.scheduled({} as ScheduledController, bindings, ctx);
   await waitOnExecutionContext(ctx);
-  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(fetcher).toHaveBeenCalledTimes(2);
   for (const route of ['usage', 'validate', 'probe']) {
     const response = await worker.fetch(new Request('https://worker.example/admin/cloudflare/' + route, { method: route === 'probe' ? 'POST' : 'GET' }), bindings, ctx);
     expect(response.status).toBe(401);

@@ -5,7 +5,7 @@ import { downloadVideo } from './downloaders';
 import { notifyOwner } from './meta';
 import { storeVideo, temporaryMediaUrl } from './media';
 import { META_MEDIA_HOSTS, reelUrl, secureUrl, sha256 } from './security';
-import { AppError, errorCode, log, type Channel, type Delivery, type Env, type Job, type ReelSource } from './types';
+import { AppError, DownloadDeferred, errorCode, log, type Channel, type Delivery, type Env, type Job, type ReelSource } from './types';
 
 export async function settings<T>(env: Env, key: string): Promise<T | null> {
   const result = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind(key).first<{ value: string }>();
@@ -113,16 +113,19 @@ async function deliveries(env: Env, id: string): Promise<Delivery[]> {
   return (await env.DB.prepare('SELECT * FROM deliveries WHERE job_id=? ORDER BY service').bind(id).all<Delivery>()).results;
 }
 
-async function publish(env: Env, job: Job): Promise<void> {
+async function publish(env: Env, job: Job, maxDeliveries = 2): Promise<void> {
   if (!job.object_key || !job.media_expires_at || job.media_expires_at <= Date.now() || !await env.MEDIA.head(job.object_key)) throw new AppError('media_missing_or_expired');
   const client = new BufferClient(env);
+  let submitted = 0;
   for (const delivery of await deliveries(env, job.id)) {
     if (delivery.state !== 'pending') continue;
+    if (submitted >= maxDeliveries) break;
     // Atomic permanent reservation BEFORE calling Buffer. An expired lease cannot re-submit.
     const reserved = await env.DB.prepare(`UPDATE deliveries SET state='submitting', updated_at=? WHERE job_id=? AND service=? AND state='pending'
       AND EXISTS (SELECT 1 FROM jobs WHERE id=? AND lease_token=? AND lease_until>?)`)
       .bind(Date.now(), job.id, delivery.service, job.id, job.lease_token, Date.now()).run();
     if (!reserved.meta.changes) continue;
+    submitted++;
     try {
       const post = await client.publish(delivery.channel_id, delivery.service, job.caption!, temporaryMediaUrl(env, job));
       const state = post.schedulingType !== 'automatic' || !['scheduled','sending','sent'].includes(post.status) ? 'failed' : 'accepted';
@@ -138,14 +141,20 @@ async function publish(env: Env, job: Job): Promise<void> {
   }
   const current = await deliveries(env, job.id);
   if (current.length !== 2) throw new AppError('deliveries_missing');
+  if (current.some(delivery => delivery.state === 'pending')) { await updateJob(env, job, 'ready'); return; }
   log('buffer_submission_summary', { job: job.id, bothAccepted: current.every(d => d.state === 'accepted') });
   await updateJob(env, job, 'waiting', null, 60_000);
 }
 
-async function checkPosts(env: Env, job: Job): Promise<void> {
+async function checkPosts(env: Env, job: Job, maxDeliveries = 2): Promise<void> {
   const client = new BufferClient(env);
-  for (const delivery of await deliveries(env, job.id)) {
+  const checked = new Set<string>();
+  const dueBefore = Date.now() - 60_000;
+  const oldest = (await deliveries(env, job.id)).sort((a, b) => (a.updated_at ?? 0) - (b.updated_at ?? 0));
+  for (const delivery of oldest) {
     if (delivery.state !== 'accepted' || !delivery.post_id || delivery.post_status === 'sent') continue;
+    if (checked.size >= maxDeliveries) break;
+    checked.add(delivery.service);
     const post = await client.post(delivery.post_id);
     const failed = post.schedulingType !== 'automatic' || ['error','draft','needs_approval'].includes(post.status);
     await env.DB.prepare('UPDATE deliveries SET post_status=?, state=?, error_code=?, updated_at=? WHERE job_id=? AND service=?')
@@ -173,22 +182,36 @@ async function checkPosts(env: Env, job: Job): Promise<void> {
   } else if (!needsMedia && unknown) {
     await updateJob(env, job, 'attention', 'buffer_submission_uncertain');
     log('job_needs_attention', { job: job.id, code: 'buffer_submission_uncertain' });
-  } else await updateJob(env, job, 'waiting', unknown ? 'buffer_submission_uncertain' : null, Date.now() - job.created_at > 600_000 ? 3600_000 : 60_000);
+  } else {
+    const progressed = current.some(d => checked.has(d.service) && (d.post_status === 'sent' || d.state === 'failed'));
+    const remaining = current.some(d => d.state === 'accepted' && d.post_status !== 'sent' && !checked.has(d.service) && (progressed || (d.updated_at ?? 0) <= dueBefore));
+    // A recovered old DM can have a newly uploaded video. Give its new
+    // submissions the normal processing window before hourly backoff.
+    const ttl = Math.min(Math.max(Number(env.MEDIA_TTL_SECONDS) || 86400, 3600), 172800) * 1000;
+    const mediaStartedAt = job.media_expires_at ? job.media_expires_at - ttl : job.created_at;
+    await updateJob(env, job, 'waiting', unknown ? 'buffer_submission_uncertain' : null, remaining ? 0 : Date.now() - mediaStartedAt > 600_000 ? 3600_000 : 60_000);
+  }
 }
 
-export async function processJob(env: Env, id: string): Promise<void> {
+export async function processJob(env: Env, id: string, maxStages = 3, maxDeliveries = 2): Promise<void> {
   if (!env.BUFFER_API_KEY || !env.PUBLIC_BASE_URL || env.REPOST_PERMISSION_CONFIRMED !== 'true') return;
   if (!(await cloudflareCapacity(env)).allowed) return;
   // Process short stages immediately; durable cron recovery handles slow/killed invocations.
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < Math.min(maxStages, 3); i++) {
     const job = await claimJob(env, id);
     if (!job) return;
     try {
       if (job.state === 'pending') await download(env, job);
-      else if (job.state === 'ready') await publish(env, job);
-      else await checkPosts(env, job);
+      else if (job.state === 'ready') await publish(env, job, maxDeliveries);
+      else await checkPosts(env, job, maxDeliveries);
     } catch (error) {
       const code = errorCode(error);
+      if (job.state === 'pending' && error instanceof DownloadDeferred) {
+        await env.DB.prepare('UPDATE jobs SET attempts=?,object_key=NULL,media_token=NULL,media_expires_at=NULL WHERE id=? AND lease_token=?').bind(job.attempts, job.id, job.lease_token).run();
+        await updateJob(env, job, 'pending', code, Math.max(60_000, error.retryAt - Date.now()));
+        log('download_deferred', { job: job.id, code });
+        return;
+      }
       if (code.startsWith('cloudflare_')) {
         // A concurrent quota reservation can stop a stage after its initial
         // capacity check. Preserve it for resumption and keep retry allowance.
@@ -209,7 +232,7 @@ export async function processJob(env: Env, id: string): Promise<void> {
   }
 }
 
-export async function maintenance(env: Env): Promise<void> {
+export async function maintenance(env: Env, processJobs = true): Promise<string[]> {
   const now = Date.now();
   await env.DB.prepare("DELETE FROM settings WHERE key='owner_setup' AND json_extract(value, '$.expiresAt')<=?").bind(now).run();
   const expired = (await env.DB.prepare('SELECT * FROM jobs WHERE media_expires_at<=? AND object_key IS NOT NULL LIMIT 20').bind(now).all<Job>()).results;
@@ -233,5 +256,6 @@ export async function maintenance(env: Env): Promise<void> {
     await saveSetting(env, 'last_media_sweep', now);
   }
   const due = (await env.DB.prepare("SELECT id FROM jobs WHERE state IN ('pending','ready','waiting') AND next_run_at<=? AND lease_until<=? ORDER BY next_run_at LIMIT 3").bind(now,now).all<{ id: string }>()).results;
-  for (const job of due) await processJob(env, job.id);
+  if (processJobs) for (const job of due) await processJob(env, job.id);
+  return due.map(job => job.id);
 }
