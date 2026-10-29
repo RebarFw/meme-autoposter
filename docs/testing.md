@@ -1,5 +1,18 @@
 # Verification
 
+## Missing English Reel recovery - 2026-10-29
+
+The two approved rebarfw messages sent on October 28 at 18:59:45 UTC and October 29 at 22:04:09 UTC returned empty text, no shares, no attachments and is_unsupported=false through Meta. Successful earlier messages returned a Reel permalink. Both empty IDs had been marked seen without a job by the English poller. The quota guard was allowed and polling was current; this was a missing-media ingestion failure rather than the previous monolithic-cron CPU failure.
+
+Both messages displayed the same playable Reel in the authorized okbruhfiles inbox. Its original URL and caption were recovered from the visible page; one original message-derived job was queued. Apify returned restricted_page and the free site resolver could not retrieve the media. Two already-loaded Meta CDN tracks were downloaded without sending login cookies or account credentials to another service, matched to the 788x576, 24.066666-second Reel and combined into a compatible H.264/AAC MP4. Frame content matched the visible original; source audio was retained. The 5,236,259-byte MP4 was uploaded through the new authenticated existing-job recovery endpoint, which enforces ordinary media checks, private R2 reservations, source identity/age and absence of Buffer reservations. No extra posting job was created for the second same-content message; its polling state was resolved against the recovery after the same Reel was verified in the inbox.
+
+The English bot now retries empty approved media up to 16 bounded detail reads, exposes pending/attention counts, supports direct MP4 DMs and profile-prefixed Reel links, and durably ingests signed webhook media while polling remains active. The English Meta app was already Published with its callback and messages subscription enabled. Those settings were inspected without modification; Meta's signed sample was accepted by the deployed Worker. The owner could not send a different fresh Reel during verification, so this test does not prove live new-share ingress end to end.
+
+Validation: lint, typecheck, 136 Worker tests and 3 deployment-isolation tests passed; native Worker dry build and health, Meta GET verification and admin rejection passed. Tests run one test file at a time because the first parallel run on this host timed out in four otherwise completed tests. Atomic-concurrency assertions inside each test remain enabled. The original caption/hashtag policy, 25 MiB limit, owner checks, permanent delivery reservations, Cloudflare 90% stop and Apify Free budget guards remain. No paid service, account permission or subscription was enabled.
+
+Deployed version: 3eed960d-0bc5-49d4-82b3-9305fe763e0d. Rollback: 09d64de4-ed4d-4ecd-9a23-10d35e6db249. Private source proof, recovery job ID, validation hash, before-state and runtime facts are retained under .local/incident-2026-10-29/.
+
+
 ## Free-plan CPU repair and backlog recovery - 2026-10-26
 
 The English Worker had not been deployed since October 4. Live cron logs showed exceededCpu with 18 ms reported CPU while its monolithic invocation performed usage analytics, polling and job work. Four jobs were stalled: one with existing accepted Buffer posts and three before publication. The existing private R2, D1, caption policy, owner identity and delivery reservations were retained.

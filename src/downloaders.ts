@@ -21,7 +21,7 @@ export const PUBLIC_PAGE_HEADERS = {
 
 export class MetaAttachmentDownloader implements VideoDownloader {
   readonly name = 'meta-attachment';
-  supports(source: ReelSource): boolean { return !!source.attachmentUrl && source.kind === 'reel'; }
+  supports(source: ReelSource): boolean { return !!source.attachmentUrl && ['reel','video'].includes(source.kind); }
   async download(source: ReelSource, env?: Env, signal?: AbortSignal): Promise<DownloadedVideo> {
     return videoAt(source.attachmentUrl!, META_MEDIA_HOSTS, this.name, env, downloadSignal(signal, 25_000));
   }

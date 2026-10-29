@@ -3,7 +3,7 @@ import { apifyBudgetStatus } from './apify-budget';
 import { CloudflareUsageError, cleanupCloudflareReservations, cloudflareCapacity, requireCloudflareCapacity, withCloudflareR2Guard } from './cloudflare-usage';
 import { probeCloudflareGuard } from './cloudflare-probe';
 import { diagnoseDownload, probeApifyDownload, probeThirdPartyDownload } from './download-diagnostics';
-import { enqueue, maintenance, processJob, refreshPosts, retryDownload, saveSetting, settings } from './jobs';
+import { enqueue, maintenance, processJob, recoverVideoUpload, refreshPosts, retryDownload, saveSetting, settings } from './jobs';
 import { metaRequest, parseMessages } from './meta';
 import { diagnoseMeta } from './meta-diagnostics';
 import { acceptOwnerSetup, diagnoseOwnerSetup, finishOwnerSetup, importOwnerSetup, ownerSetupStatus, startOwnerSetup } from './owner-setup';
@@ -38,7 +38,7 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
     const body = JSON.parse(new TextDecoder().decode(await limitedBytes(request.body, 8192)));
     const source = body?.source as ReelSource | undefined;
     const recipients = await settings<string[]>(env, 'recipient_ids');
-    if (!source || !['reel','shared-post'].includes(source.kind) || typeof source.messageId !== 'string' || !/^[\x21-\x7e]{1,512}$/.test(source.messageId) || !env.OWNER_IG_SENDER_ID || source.senderId !== env.OWNER_IG_SENDER_ID || !recipients?.includes(source.recipientId) || !Number.isFinite(source.timestamp) || source.timestamp < Date.now() - 48 * 3600_000 || source.timestamp > Date.now() + 300_000) throw new AppError('invalid_scheduled_source');
+    if (!source || !['reel','shared-post','video'].includes(source.kind) || typeof source.messageId !== 'string' || !/^[\x21-\x7e]{1,512}$/.test(source.messageId) || !env.OWNER_IG_SENDER_ID || source.senderId !== env.OWNER_IG_SENDER_ID || !recipients?.includes(source.recipientId) || !Number.isFinite(source.timestamp) || source.timestamp < Date.now() - 48 * 3600_000 || source.timestamp > Date.now() + 300_000) throw new AppError('invalid_scheduled_source');
     return json({ jobId: await enqueue(env, source) });
   }
   if (path === '/admin/tasks/job' && request.method === 'POST') {
@@ -66,6 +66,10 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
     }
     await retryDownload(env, typeof body?.jobId === 'string' ? body.jobId : '', resolved);
     return json({ queued: true, jobId: body.jobId });
+  }
+  if (path === '/admin/jobs/recover-upload' && request.method === 'POST') {
+    await recoverVideoUpload(env, request.headers.get('x-recovery-job') ?? '', request.headers.get('x-recovery-reel') ?? '', new Response(request.body, { headers: request.headers }));
+    return json({ queued: true });
   }
   if (path === '/admin/jobs/refresh-posts' && request.method === 'POST') {
     const body = JSON.parse(new TextDecoder().decode(await limitedBytes(request.body, 1024)));
@@ -140,7 +144,6 @@ export default {
       let payload: unknown;
       try { payload = JSON.parse(new TextDecoder().decode(body)); } catch { return json({ error: 'invalid_json' },400); }
       if (await acceptOwnerSetup(env, payload)) return json({ received: true, ownerSetup: true });
-      if (env.INGEST_MODE === 'polling') return json({ received: true, ingestMode: 'polling' });
       // Until an owner is explicitly installed, no inbound event is authorized
       // to publish. Acknowledge synthetic tests and irrelevant notifications;
       // making Meta retry these cannot improve setup and creates a retry storm.
@@ -153,8 +156,16 @@ export default {
       if (sources.length && (!env.BUFFER_API_KEY || !env.PUBLIC_BASE_URL || env.REPOST_PERMISSION_CONFIRMED !== 'true')) return json({ error: 'publishing_not_configured' },503);
       // Acknowledge only after all jobs are durable. Meta retries are INSERT OR IGNORE.
       const jobIds: string[] = [];
-      for (const source of sources) jobIds.push(await enqueue(env, { ...source, recipientId: recipients[0]! }));
-      if (jobIds.length) ctx.waitUntil((async () => {
+      for (const source of sources) {
+        const canonical = { ...source, recipientId: recipients[0]! };
+        if (env.INGEST_MODE === 'polling') {
+          const result = await cloudTask(env, '/admin/tasks/enqueue', { source: canonical });
+          if (!/^[a-f0-9]{64}$/.test(result.jobId ?? '')) throw new AppError('invalid_scheduled_job');
+          jobIds.push(result.jobId!);
+        } else jobIds.push(await enqueue(env, canonical));
+      }
+      if (jobIds.length) log('webhook_ingested', { received: jobIds.length });
+      if (jobIds.length && env.INGEST_MODE !== 'polling') ctx.waitUntil((async () => {
         for (const jobId of [...new Set(jobIds)]) await processJob(env, jobId);
       })().catch(error => log('background_failed', { code: errorCode(error) })));
       return json({ received: true });

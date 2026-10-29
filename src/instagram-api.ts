@@ -26,7 +26,7 @@ export async function apiMessageList(env: Env, conversationId: string): Promise<
 }
 
 export async function apiMessage(env: Env, messageId: string, shares = false): Promise<ApiObject> {
-  const fields = 'id,created_time,from,to,message' + (shares ? ',shares{link,type,url,id,name}' : '');
+  const fields = 'id,created_time,from,to,message' + (shares ? ',is_unsupported,shares{link,type,url,id,name},attachments{file_url,video_data}' : '');
   return metaRequest<ApiObject>(env, `${encodeURIComponent(messageId)}?fields=${fields}`);
 }
 
@@ -34,7 +34,7 @@ export function parseApiMessage(message: ApiObject, owner: string, recipients: s
   const sender = apiObject(message.from);
   const recipient = apiItems(message.to).find(item => typeof item.id === 'string' && recipients.includes(item.id));
   const timestamp = apiTimestamp(message.created_time);
-  if (sender.id !== owner || !recipient || !apiId(message.id) || !Number.isFinite(timestamp) || timestamp < since || timestamp > now + 300_000) return [];
+  if (sender.id !== owner || !recipient || !apiId(message.id) || !Number.isFinite(timestamp) || timestamp < since || timestamp > now + 300_000 || message.is_unsupported || message.is_deleted || message.is_echo || message.is_self) return [];
   // Instagram Login's actual Reel response uses shares.data[].link even
   // when the generic Message reference's url/type fields are omitted.
   const attachments = apiItems(message.shares).filter(share => ['post', 'reel', 'ig_post', 'ig_reel'].includes(String(share.type)) || (!share.type && !!reelUrl(share.link))).flatMap(share => {
@@ -43,6 +43,11 @@ export function parseApiMessage(message: ApiObject, owner: string, recipients: s
     const payload = { url: share.url ?? link, ig_post_media_id: share.id, title: share.name };
     return [{ type, payload }, ...(link && share.url ? [{ type: 'share', payload: { ...payload, url: link } }] : [])];
   });
+  for (const attachment of apiItems(message.attachments)) {
+    const video = apiObject(attachment.video_data);
+    const url = video.url ?? attachment.file_url;
+    if (attachment.video_data && typeof url === 'string') attachments.push({ type: 'video', payload: { url, ig_post_media_id: undefined, title: '' } });
+  }
   const parsed = parseMessages({ object: 'instagram', entry: [{ id: recipient.id, messaging: [{
     sender: { id: sender.id }, recipient: { id: recipient.id }, timestamp,
     message: { mid: message.id, text: message.message, attachments },

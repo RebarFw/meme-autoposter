@@ -36,7 +36,7 @@ export interface ReelSource {
   attachmentUrl?: string;
   mediaId?: string;
   title?: string;
-  kind: 'reel' | 'shared-post';
+  kind: 'reel' | 'shared-post' | 'video';
 }
 
 export interface Job {

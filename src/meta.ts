@@ -42,12 +42,16 @@ export function parseMessages(payload: unknown, owner: string, recipients: strin
       if (Array.isArray(message.attachments)) {
         for (const rawAttachment of message.attachments.slice(0, 10)) {
           const attachment = record(rawAttachment);
-          if (!['share','ig_post','ig_reel','reel'].includes(String(attachment.type))) continue;
+          if (!['share','ig_post','ig_reel','reel','video'].includes(String(attachment.type))) continue;
           const data = record(attachment.payload);
+          if (attachment.type === 'video') {
+            if (reels.length || foundShare) { ambiguous = true; break; }
+            kind = 'video'; title = '';
+          } else if (kind === 'video') { ambiguous = true; break; }
           const candidateId = id(data.ig_post_media_id ?? data.id);
           if (mediaId && candidateId && mediaId !== candidateId) { ambiguous = true; break; }
           mediaId ??= candidateId;
-          if (typeof data.title === 'string') title = data.title.slice(0, 10_000);
+          if (attachment.type !== 'video' && typeof data.title === 'string') title = data.title.slice(0, 10_000);
           if (attachment.type === 'ig_reel' || attachment.type === 'reel') kind = 'reel';
           if (typeof data.url !== 'string') continue;
           const candidateReel = reelUrl(data.url);

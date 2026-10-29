@@ -64,6 +64,46 @@ export async function refreshPosts(env: Env, id: string): Promise<void> {
   await processJob(env, id);
 }
 
+// Operator-only recovery for an existing approved DM when Meta and public
+// downloaders withhold its media. The caller must match the original Reel.
+// Normal quotas, private storage and permanent Buffer reservations still apply.
+export async function recoverVideoUpload(env: Env, id: string, originalUrl: string, response: Response): Promise<void> {
+  await requireCloudflareCapacity(env);
+  const row = /^[a-f0-9]{64}$/.test(id) ? await env.DB.prepare('SELECT * FROM jobs WHERE id=?').bind(id).first<Job>() : null;
+  if (!row?.source_json || !env.OWNER_IG_SENDER_ID) { await response.body?.cancel(); throw new AppError('upload_recovery_not_safe'); }
+  const source: ReelSource = JSON.parse(row.source_json);
+  const recipients = await settings<string[]>(env, 'recipient_ids');
+  const channels = await settings<Channel[]>(env, 'channels');
+  if (source.kind !== 'reel' || source.senderId !== env.OWNER_IG_SENDER_ID || !recipients?.includes(source.recipientId) || !reelUrl(source.reelUrl) || reelUrl(source.reelUrl) !== reelUrl(originalUrl) || !Number.isFinite(source.timestamp) || source.timestamp < Date.now() - 48 * 3600_000 || source.timestamp > Date.now() + 300_000 || channels?.length !== 2) {
+    await response.body?.cancel(); throw new AppError('upload_recovery_not_safe');
+  }
+  const now = Date.now(), lease = crypto.randomUUID();
+  const job = await env.DB.prepare(`UPDATE jobs SET lease_token=?,lease_until=? WHERE id=? AND state='attention' AND object_key IS NULL AND lease_until<=? AND source_json=?
+    AND NOT EXISTS (SELECT 1 FROM deliveries WHERE job_id=?) RETURNING *`)
+    .bind(lease, now + 180_000, id, now, row.source_json, id).first<Job>();
+  if (!job) { await response.body?.cancel(); throw new AppError('upload_recovery_not_safe'); }
+  const key = `meme-autoposter/${id}.mp4`;
+  const token = crypto.randomUUID().replaceAll('-','') + crypto.randomUUID().replaceAll('-','');
+  const expires = now + Math.min(Math.max(Number(env.MEDIA_TTL_SECONDS) || 86400, 3600), 172800) * 1000;
+  try {
+    await env.DB.prepare('UPDATE jobs SET object_key=?,media_token=?,media_expires_at=? WHERE id=? AND lease_token=?').bind(key, token, expires, id, lease).run();
+    await storeVideo(env, response, key, expires);
+    const saved = await env.DB.prepare('UPDATE jobs SET caption=? WHERE id=? AND lease_token=?').bind(createCaption(source.title), id, lease).run();
+    if (!saved.meta.changes) throw new AppError('upload_recovery_lease_lost');
+    await env.DB.batch(channels.map(c => env.DB.prepare('INSERT OR IGNORE INTO deliveries(job_id,service,channel_id,updated_at) VALUES (?,?,?,?)').bind(id,c.service,c.id,Date.now())));
+    await updateJob(env, job, 'ready');
+    log('uploaded_video_recovered', { job: id });
+  } catch (error) {
+    await response.body?.cancel().catch(() => {});
+    const latest = await env.DB.prepare('SELECT * FROM jobs WHERE id=?').bind(id).first<Job>();
+    if (latest?.lease_token === lease) {
+      await removeMedia(env, latest);
+      await updateJob(env, job, 'attention', errorCode(error));
+    }
+    throw error;
+  }
+}
+
 export async function claimJob(env: Env, id: string, now = Date.now()): Promise<Job | null> {
   const lease = crypto.randomUUID();
   return env.DB.prepare(`UPDATE jobs SET lease_token=?, lease_until=?, updated_at=?
