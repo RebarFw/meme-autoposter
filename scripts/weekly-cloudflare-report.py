@@ -40,7 +40,7 @@ def nonnegative(value):
 def graphql(account_id, token):
     now = datetime.now(timezone.utc)
     month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    storage_start = now - timedelta(days=3)
+    storage_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     query = """query WeeklyR2 {
       viewer {
         accounts(filter: { accountTag: "__ACCOUNT__" }) {
@@ -53,7 +53,7 @@ def graphql(account_id, token):
             filter: { datetime_geq: "__STORAGE__", datetime_leq: "__NOW__" }
           ) {
             max { payloadSize metadataSize }
-            dimensions { bucketName storageClass datetime }
+            dimensions { bucketName storageClass }
           }
         }
       }
@@ -113,22 +113,21 @@ def check_account(name, account_id, secret_name):
             if storage_class != "Standard" and n:
                 warnings.append("non-Standard R2 operation")
 
-        # Use the freshest reported sample for every bucket/storage class;
-        # do not sum snapshots across timestamps.
+        # Each returned bucket/storage-class group reports max size today.
         latest = {}
         for row in storage:
             dims = row["dimensions"]
             key = (dims["bucketName"], dims["storageClass"])
-            stamp = dims["datetime"]
-            if not all(isinstance(x, str) and x for x in (*key, stamp)):
+            if not all(isinstance(x, str) and x for x in key):
                 raise ValueError("Invalid storage dimensions")
             amount = nonnegative(row["max"]["payloadSize"]) + nonnegative(row["max"]["metadataSize"])
-            if key not in latest or stamp > latest[key][0]:
-                latest[key] = (stamp, amount)
+            if key in latest:
+                raise ValueError("Duplicated storage dimension")
+            latest[key] = amount
 
-        bytes_stored = sum(amount for (_, amount) in latest.values())
+        bytes_stored = sum(latest.values())
         if any(storage_class != "Standard" and amount > 0
-               for (_, storage_class), (_, amount) in latest.items()):
+               for (_, storage_class), amount in latest.items()):
             warnings.append("non-Standard R2 storage")
         if bytes_stored >= 8 * GB:
             warnings.append("storage approaching 10 GB-month free allowance")
