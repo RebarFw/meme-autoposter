@@ -23,8 +23,9 @@ To test: open **Actions → Weekly Cloudflare free-tier report → Run workflow*
 ## What it checks
 
 - Account-wide R2 Standard and non-Standard storage from today's analytics snapshots
-- R2 Class A and Class B operations since the start of the UTC month
-- Warnings beginning at 8 GB displayed storage, 800k A operations or 8 million B operations
+- R2 Class A and Class B operations in the last 7 days **and** since the start of the UTC month
+- Month-to-date free-tier percentage used, estimated operations remaining, and LOW/WATCH/CHECK labels
+- WATCH labels from 50% of an operations allowance; CHECK warnings at 80% (800k A / 8 million B), at an 8 GB storage snapshot, or for unusual/missing analytics
 - Missing/partial Cloudflare analytics (warnings, **never** assumed $0)
 
-**Important limits:** R2 free Standard storage is metered in GB-month, **not** instantaneous GB. The displayed current storage value is only a warning indicator, not a bill or price estimate. Cloudflare analytics is not the invoice and can lag. The workflow **cannot verify actual bills, account plans, paid Observability, or other Cloudflare services**. Check both accounts' **Billing → Billable Usage** and **Observability** subscriptions to confirm no fees. Alerts and this report do not stop charges. This workflow never changes subscriptions, deployments, Workers, D1, or R2. Scheduled GitHub Actions jobs may be delayed.
+**Important limits:** R2 free Standard storage is metered in GB-month, **not** instantaneous GB. The displayed current storage value is only a warning indicator, not a percentage of the monthly storage allowance, a bill or price estimate. Cloudflare analytics is not the invoice and can lag. The workflow **cannot verify actual bills, account plans, paid Observability, or other Cloudflare services**. Check both accounts' **Billing → Billable Usage** and **Observability** subscriptions to confirm no fees. Alerts and this report do not stop charges. This workflow never changes subscriptions, deployments, Workers, D1, or R2. Its scheduled email is a risk indicator for **R2 only**, not a complete free-tier monitor for Workers, D1 or other products. Scheduled GitHub Actions jobs may be delayed.
