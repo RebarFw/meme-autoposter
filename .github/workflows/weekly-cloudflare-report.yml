@@ -1,0 +1,27 @@
+name: Weekly Cloudflare free-tier report
+
+on:
+  schedule:
+    - cron: '17 8 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Send read-only weekly R2 usage report
+        env:
+          CF_ENGLISH_ANALYTICS_TOKEN: ${{ secrets.CF_ENGLISH_ANALYTICS_TOKEN }}
+          CF_ARABIC_ANALYTICS_TOKEN: ${{ secrets.CF_ARABIC_ANALYTICS_TOKEN }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          REPORT_EMAIL_TO: ${{ secrets.REPORT_EMAIL_TO }}
+        run: python scripts/weekly-cloudflare-report.py
