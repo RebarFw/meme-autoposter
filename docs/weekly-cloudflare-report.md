@@ -22,10 +22,33 @@ To test: open **Actions → Weekly Cloudflare free-tier report → Run workflow*
 
 ## What it checks
 
+The email is now a **responsive HTML dashboard** with a plain-text fallback.
+It covers the English and Arabic accounts separately and keeps the existing
+Sunday 08:17 UTC schedule, Gmail recipient secret, and Cloudflare read-only tokens.
+
+
 - Account-wide R2 Standard and non-Standard storage from today's analytics snapshots
 - R2 Class A and Class B operations in the last 7 days **and** since the start of the UTC month
 - Month-to-date free-tier percentage used, estimated operations remaining, and LOW/WATCH/CHECK labels
 - WATCH labels from 50% of an operations allowance; CHECK warnings at 80% (800k A / 8 million B), at an 8 GB storage snapshot, or for unusual/missing analytics
 - Missing/partial Cloudflare analytics (warnings, **never** assumed $0)
+
+### Additional read-only analytics
+
+- **Workers**: meme Worker invocation estimates for the last 24 hours and 7 days, including runtime errors. These are **not account-wide billed requests**.
+- **D1**: each project's configured database — current UTC day's rows read/written and query counts, 7-calendar-day rows, and today's storage snapshot when available. These are not account-wide billing totals.
+- **GitHub CI**: last completed public check.yml workflow run for each repository, when available. CI success does **not** verify Instagram posting or bot uptime.
+- **Instagram**: labeled **not connected**. Cloudflare Analytics Read cannot provide reliable published/failed Instagram post counts.
+- **Billing**: **not verified**. Actual charges and paid plans are not retrieved; the report never guarantees $0.
+
+Optional datasets and GitHub status are best-effort. Missing data is shown as
+**unavailable**, never fabricated zero. Missing core R2 analytics still produces
+a CHECK warning. Worker errors, near-free-plan D1 daily volume, or failed GitHub
+checks also produce attention warnings.
+
+No new secrets, paid APIs, application deployments, runtime writes or extra
+scheduled workflows are required. Workers and D1 daily free-plan limits are
+shared across an account; a single script/database cannot establish remaining
+account-wide allowance.
 
 **Important limits:** R2 free Standard storage is metered in GB-month, **not** instantaneous GB. The displayed current storage value is only a warning indicator, not a percentage of the monthly storage allowance, a bill or price estimate. Cloudflare analytics is not the invoice and can lag. The workflow **cannot verify actual bills, account plans, paid Observability, or other Cloudflare services**. Check both accounts' **Billing → Billable Usage** and **Observability** subscriptions to confirm no fees. Alerts and this report do not stop charges. This workflow never changes subscriptions, deployments, Workers, D1, or R2. Its scheduled email is a risk indicator for **R2 only**, not a complete free-tier monitor for Workers, D1 or other products. Scheduled GitHub Actions jobs may be delayed.
